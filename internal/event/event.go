@@ -44,12 +44,26 @@ var HighValueKinds = []string{
 	"tool_call",
 	"resource_read",
 	"command",
+	// The Elasticsearch query is this list's `prompt`: not "someone touched
+	// the database" but "someone asked it for credit card numbers".
+	"search_query",
 
 	// Actions that are never accidental.
 	"write_request",
+	"delete_request",
 	"monlist_probe",
 	"model_write",
 	"model_delete",
+	// A container spec is a written-down plan. The interesting ones bind-mount
+	// the host filesystem or ask for `Privileged`, and neither happens by
+	// accident.
+	"container_create",
+
+	// Reaching for the instance metadata service is the cloud equivalent of
+	// reading /etc/shadow: there is no benign reason for an unfamiliar process
+	// to ask 169.254.169.254 for the role credentials, and the answer is
+	// usually the last thing that happens before lateral movement.
+	"credential_request",
 
 	// An attacker already at work on the segment. Nothing legitimate answers a
 	// name that does not exist, so an LLMNR reply is not a sign of an intrusion

@@ -90,21 +90,27 @@ type Remote struct {
 }
 
 type Services struct {
-	SSH     SSH      `yaml:"ssh"`
-	HTTP    HTTP     `yaml:"http"`
-	HTTPS   HTTPS    `yaml:"https"`
-	Ollama  Ollama   `yaml:"ollama"`
-	Telnet  Telnet   `yaml:"telnet"`
-	FTP     FTP      `yaml:"ftp"`
-	Redis   Redis    `yaml:"redis"`
-	TFTP    TFTP     `yaml:"tftp"`
-	NTP     NTP      `yaml:"ntp"`
-	K8s     K8s      `yaml:"k8s"`
-	MCP     MCP      `yaml:"mcp"`
-	Git     Git      `yaml:"git"`
-	MongoDB MongoDB  `yaml:"mongodb"`
-	LLMNR   LLMNR    `yaml:"llmnr"`
-	Banners []Banner `yaml:"banners"`
+	SSH           SSH           `yaml:"ssh"`
+	HTTP          HTTP          `yaml:"http"`
+	HTTPS         HTTPS         `yaml:"https"`
+	Ollama        Ollama        `yaml:"ollama"`
+	Telnet        Telnet        `yaml:"telnet"`
+	FTP           FTP           `yaml:"ftp"`
+	Redis         Redis         `yaml:"redis"`
+	TFTP          TFTP          `yaml:"tftp"`
+	NTP           NTP           `yaml:"ntp"`
+	K8s           K8s           `yaml:"k8s"`
+	Kubelet       Kubelet       `yaml:"kubelet"`
+	Docker        Docker        `yaml:"docker"`
+	IMDS          IMDS          `yaml:"imds"`
+	Elasticsearch Elasticsearch `yaml:"elasticsearch"`
+	Jenkins       Jenkins       `yaml:"jenkins"`
+	GitLab        GitLab        `yaml:"gitlab"`
+	MCP           MCP           `yaml:"mcp"`
+	Git           Git           `yaml:"git"`
+	MongoDB       MongoDB       `yaml:"mongodb"`
+	LLMNR         LLMNR         `yaml:"llmnr"`
+	Banners       []Banner      `yaml:"banners"`
 }
 
 type SSH struct {
@@ -212,6 +218,76 @@ type K8s struct {
 	Key  string `yaml:"key"`
 }
 
+// Kubelet is the node agent's API. It is the more useful of the two Kubernetes
+// ports to an intruder: a kubelet that trusts anonymous requests lists every
+// pod on the node and then runs a command inside any of them.
+type Kubelet struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	// NodeName appears in the certificate subject, the pod specs, and the
+	// fabricated command output. Empty means this machine's hostname.
+	NodeName string `yaml:"node_name"`
+	// Cert and Key are generated on first run if absent. Keep them: a
+	// certificate that changes every restart is a honeypot fingerprint.
+	Cert string `yaml:"cert"`
+	Key  string `yaml:"key"`
+}
+
+// Docker is the Engine API. An exposed socket is not a vulnerability, it is a
+// shell — anyone who reaches it can bind-mount the host's root filesystem into
+// a container they create.
+type Docker struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	Version string `yaml:"version"`
+	// APIVersion is the level clients negotiate against, and appears in the
+	// path of nearly every request.
+	APIVersion string `yaml:"api_version"`
+}
+
+// IMDS is the cloud instance metadata service — the same 169.254.169.254 on
+// every cloud, and the first thing a foothold or an SSRF reaches for.
+type IMDS struct {
+	Enabled bool `yaml:"enabled"`
+	// Addr defaults to an ordinary port, because 169.254.169.254:80 needs the
+	// link-local address to exist on the host. See wisp.example.yaml for how to
+	// put the real address in front of it — and for why you must not do that on
+	// a machine that is itself a cloud instance.
+	Addr string `yaml:"addr"`
+	// Region and Role shape the fabricated identity. Match them to the
+	// organisation being imitated: an instance in us-east-1 running
+	// prod-app-instance-role is unremarkable in one company and obviously fake
+	// in another.
+	Region string `yaml:"region"`
+	Role   string `yaml:"role"`
+}
+
+// Elasticsearch is emulated wide open, which is what the installed base looks
+// like and what makes an intruder send a query instead of a password.
+type Elasticsearch struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	Version string `yaml:"version"`
+	// ClusterName appears in the document every scanner reads first.
+	ClusterName string `yaml:"cluster_name"`
+}
+
+// Jenkins is a CI controller, complete with the Groovy script console that
+// turns read access into code execution.
+type Jenkins struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	Version string `yaml:"version"`
+}
+
+// GitLab captures stolen personal access tokens the way the k8s decoy captures
+// stolen service-account tokens.
+type GitLab struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	Version string `yaml:"version"`
+}
+
 type MCP struct {
 	Enabled bool   `yaml:"enabled"`
 	Addr    string `yaml:"addr"`
@@ -307,6 +383,53 @@ func Default() *Config {
 				Version: "v1.29.4",
 				Cert:    "k8s-cert.pem",
 				Key:     "k8s-key.pem",
+			},
+			Kubelet: Kubelet{
+				// 10250 is the kubelet's real port and is unprivileged.
+				Enabled: true,
+				Addr:    "0.0.0.0:10250",
+				Cert:    "kubelet-cert.pem",
+				Key:     "kubelet-key.pem",
+			},
+			Docker: Docker{
+				// 2375 is the plaintext Engine API port — the one that gets
+				// attacked. 2376 is the TLS one, and nobody is breached
+				// through it.
+				Enabled:    true,
+				Addr:       "0.0.0.0:2375",
+				Version:    "24.0.7",
+				APIVersion: "1.43",
+			},
+			IMDS: IMDS{
+				// Not 169.254.169.254:80: that address has to exist on the host
+				// first, and adding it on a machine that is itself a cloud
+				// instance would shadow the real metadata service. Put the real
+				// address in front of this one deliberately, or not at all.
+				Enabled: true,
+				Addr:    "0.0.0.0:8169",
+				Region:  "us-east-1",
+				Role:    "app-instance-role",
+			},
+			Elasticsearch: Elasticsearch{
+				// 9200 is Elasticsearch's real port and is unprivileged.
+				Enabled:     true,
+				Addr:        "0.0.0.0:9200",
+				Version:     "7.17.9",
+				ClusterName: "elasticsearch",
+			},
+			Jenkins: Jenkins{
+				// Jenkins' own default is 8080, which the HTTP decoy already
+				// has. 8081 is the next thing anyone running both would pick.
+				Enabled: true,
+				Addr:    "0.0.0.0:8081",
+				Version: "2.440.3",
+			},
+			GitLab: GitLab{
+				// 8929 is what GitLab's own container documentation uses for
+				// plain HTTP, and it needs no redirect.
+				Enabled: true,
+				Addr:    "0.0.0.0:8929",
+				Version: "16.11.2",
 			},
 			MCP: MCP{
 				// MCP has no standard port; 8931 avoids the crowded dev-server

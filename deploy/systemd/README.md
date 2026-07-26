@@ -47,6 +47,23 @@ the real ports, redirect at the firewall rather than granting
 sudo nft add rule inet nat prerouting tcp dport 22 redirect to :2222
 ```
 
+The IMDS decoy needs one extra step, because 169.254.169.254 is a link-local
+address that has to exist on the host before anything can bind traffic for it:
+
+```bash
+sudo ip addr add 169.254.169.254/32 dev lo
+```
+
+```bash
+sudo nft add rule inet nat prerouting ip daddr 169.254.169.254 tcp dport 80 redirect to :8169
+```
+
+**Do not do that on a machine that is itself a cloud instance.** You would
+shadow the real metadata service, and every process on the box that needs role
+credentials would start receiving fabricated ones. Without these two commands
+the decoy still runs on `:8169` and still records anything that finds it; it
+just will not catch the tooling that only ever asks 169.254.169.254.
+
 ## Console
 
 ```bash

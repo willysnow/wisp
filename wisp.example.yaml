@@ -150,6 +150,112 @@ services:
     addr: "0.0.0.0:11434"
     version: "0.5.4"
 
+  # An MCP server. Records which agent connected — its own clientInfo, which is
+  # a far stronger identifier than a user agent — and the arguments of every
+  # tool call it made. The advertised tools are deliberately tempting; the one
+  # they reach for tells you what they were after.
+  mcp:
+    enabled: true
+    # MCP has no standard port. 8931 avoids the crowded dev-server range;
+    # change it to match whatever your real servers use.
+    addr: "0.0.0.0:8931"
+    # What the decoy calls itself during `initialize`. Make it sound like
+    # something your organisation would actually run.
+    server_name: "internal-tools"
+    version: "1.4.2"
+
+  # The Kubernetes API server. Answers 403 rather than 401, which is what an
+  # anonymous-auth-enabled cluster does: 401 reads as "wrong door" and ends the
+  # interaction, while 403 reads as "right door, wrong credentials" — so the
+  # attacker retries with a stolen bearer token, and the token lands in the log.
+  k8s:
+    # 6443 is the apiserver's real port and is unprivileged.
+    enabled: true
+    addr: "0.0.0.0:6443"
+    version: "v1.29.4"
+    # Generated on first run if absent. Keep them: a certificate that changes
+    # every restart is a honeypot fingerprint.
+    cert: k8s-cert.pem
+    key: k8s-key.pem
+
+  # The kubelet — the more useful of the two Kubernetes ports to an intruder. A
+  # kubelet that trusts anonymous requests lists every pod on the node and then
+  # runs a command inside any of them, no cluster credential involved. The
+  # command they submit is the capture that matters; nothing is executed.
+  kubelet:
+    enabled: true
+    addr: "0.0.0.0:10250"
+    # Appears in the certificate subject, the pod specs, and the fabricated
+    # command output. Empty means this machine's hostname.
+    node_name: ""
+    cert: kubelet-cert.pem
+    key: kubelet-key.pem
+
+  # The Docker Engine API. An exposed socket is not a vulnerability, it is a
+  # shell: anyone who reaches it can create a container that bind-mounts the
+  # host's root filesystem and start it. The captured container specification
+  # says exactly that, and the `escape` field names why.
+  docker:
+    # 2375 is the plaintext port — the one that gets attacked. 2376 is the TLS
+    # one, and nobody is breached through it.
+    enabled: true
+    addr: "0.0.0.0:2375"
+    version: "24.0.7"
+    api_version: "1.43"
+
+  # Cloud instance metadata — the same 169.254.169.254 on every cloud, serving
+  # AWS, GCP and Azure from one listener. There is no benign reason for an
+  # unfamiliar process to ask it for role credentials, which makes this one of
+  # the few honeypot signals with almost no false-positive story.
+  #
+  # To make it answer on the real address, add the link-local IP and redirect:
+  #
+  #   ip addr add 169.254.169.254/32 dev lo
+  #   iptables -t nat -A PREROUTING -d 169.254.169.254 -p tcp --dport 80 \
+  #       -j REDIRECT --to-port 8169
+  #
+  # DO NOT do that on a machine that is itself a cloud instance. You would
+  # shadow the real metadata service, and everything on the box that needs
+  # credentials would start receiving fabricated ones.
+  imds:
+    enabled: true
+    addr: "0.0.0.0:8169"
+    # The fabricated identity. Match these to the organisation being imitated —
+    # an instance in us-east-1 running prod-app-instance-role is unremarkable
+    # in one company and obviously fake in another.
+    region: "us-east-1"
+    role: "app-instance-role"
+
+  # Elasticsearch, emulated wide open — which is what the installed base looks
+  # like and what makes an intruder send a query instead of a password. The
+  # query is the artifact: it names the fields they wanted and how many rows.
+  # Nothing is stored, nothing is deleted, every index is fictional.
+  elasticsearch:
+    enabled: true
+    addr: "0.0.0.0:9200"
+    # 8.x has security on by default, so a wide-open 8.x cluster is slightly
+    # implausible. 7.x is the single most common thing on port 9200.
+    version: "7.17.9"
+    cluster_name: "elasticsearch"
+
+  # A Jenkins controller, complete with the Groovy script console that turns
+  # read access into code execution. The submitted script is recorded and never
+  # evaluated — there is no interpreter here.
+  jenkins:
+    # Jenkins' own default is 8080, which the http decoy already has.
+    enabled: true
+    addr: "0.0.0.0:8081"
+    version: "2.440.3"
+
+  # GitLab. Captures stolen personal access tokens the way the k8s decoy
+  # captures stolen service-account tokens: public endpoints answer so there is
+  # somewhere to point the token, and everything else returns GitLab's own
+  # 401. No token is ever accepted.
+  gitlab:
+    enabled: true
+    addr: "0.0.0.0:8929"
+    version: "16.11.2"
+
   git:
     # 9418 is git's own port and is unprivileged. A git client states the full
     # repository path in its first packet, so the request alone tells you what

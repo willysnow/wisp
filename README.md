@@ -1,8 +1,8 @@
 # wisp
 
 A single-binary network honeypot sensor. Deploy it on an internal segment, wait
-for something to touch it, and get an alert with the credentials, the prompt, or
-the paths the intruder tried.
+for something to touch it, and get an alert with the credentials, the prompt,
+the query, the container spec, or the paths the intruder tried.
 
 > The name is the will-o'-the-wisp: a light in the dark that leads you off the
 > path. It is deliberately **not** Canary-anything — "Canary" and
@@ -24,9 +24,9 @@ two things are worth redoing:
    — for SMB — a working Samba install with a `full_audit` VFS module writing to
    syslog for OpenCanary to tail. `wisp` is one static binary.
 2. **Attack surface.** Intruders on an internal network in 2026 reach for the
-   Kubernetes API, the Docker socket, cloud IMDS, and whatever LLM
-   infrastructure someone stood up without auth. That last one is where `wisp`
-   starts, because nothing else covers it.
+   Kubernetes API, the kubelet, the Docker socket, cloud IMDS, the CI server,
+   and whatever LLM infrastructure someone stood up without auth. Nine of the
+   decoys below exist because of that, and OpenCanary has none of them.
 
 Everything else OpenCanary does, it currently does better, because it does it
 at all.
@@ -34,15 +34,15 @@ at all.
 ## Honest comparison
 
 OpenCanary ships 21 protocol modules. `wisp` has reimplemented **12** of them,
-plus 3 decoys OpenCanary does not have.
+plus 9 decoys OpenCanary does not have.
 
 | | OpenCanary | wisp today |
 |---|---|---|
-| Protocol modules | 21 | **12** + 3 new decoys |
+| Protocol modules | 21 | **12** + 9 new decoys |
 | Implemented here | — | `ssh`, `http`, `https`, `telnet`, `ftp`, `redis`, `tftp`, `ntp`, `git`, `mongodb`, `llmnr`, TCP banner |
 | Still missing | — | SMB, RDP, MySQL, MSSQL, VNC, SNMP, SIP, HTTP proxy, portscan |
 | SMB | yes, via external Samba | **not implemented** |
-| LLM / MCP / Kubernetes decoys | no | **yes** (`ollama`, `mcp`, `k8s`) |
+| Cloud / container / CI / LLM decoys | no | **yes** (`k8s`, `kubelet`, `docker`, `imds`, `elasticsearch`, `jenkins`, `gitlab`, `ollama`, `mcp`) |
 | Alerting | file, syslog, HPFeeds, email, webhook, + separate dedup daemon | JSONL, syslog, email, LINE, webhook (Slack/Teams/Discord), **dedup built in** |
 | Fleet console | none | **included, self-hosted** |
 | Install | Python + Twisted + Scapy (+ Samba for SMB) | one static binary |
@@ -75,12 +75,24 @@ deploying a honeypot at all.
 | banner | any | first bytes sent, for ports without a real emulator |
 | `ollama` | 11434/tcp | **model-list recon, and the actual prompts sent to your "GPU"** |
 | `k8s` | 6443/tls | **stolen service-account bearer tokens**, client certs, resources probed |
+| `kubelet` | 10250/tls | **the command they ran inside a pod**, and the token they ran it with |
+| `docker` | 2375/tcp | **the container spec** — the host mount, the `Privileged` flag, the command |
+| `imds` | 169.254.169.254 | **cloud role-credential theft**, on AWS, GCP and Azure paths |
+| `elasticsearch` | 9200/tcp | **the search query** — which fields they wanted, and how many rows |
+| `jenkins` | 8081/tcp | **the Groovy script** posted to the console, and login attempts |
+| `gitlab` | 8929/tcp | **stolen `glpat-` access tokens**, and what they pointed them at |
 | `mcp` | 8931/tcp | **which agent connected, and the tool calls it made with arguments** |
 
-### The three decoys nothing else ships
+### The nine decoys OpenCanary does not have
 
-`ollama`, `k8s`, and `mcp` cover the surface an intruder actually reaches for on
-a 2026 network, and each captures something a connection log cannot:
+These cover the surface an intruder actually reaches for on a 2026 network, and
+each captures something a connection log cannot.
+
+To be accurate about it: single-purpose honeypots exist for some of these —
+ElasticPot for Elasticsearch, and more than one Docker-socket trap — and T-Pot
+will run a pile of them side by side. What is not on offer elsewhere is all nine
+in one static binary, reporting to one console, with the LLM and MCP decoys
+alongside them.
 
 - **`ollama`** records the prompt. An unauthenticated inference endpoint is a
   free GPU, a pivot, and — when wired to internal RAG — an exfiltration path.
@@ -89,6 +101,61 @@ a 2026 network, and each captures something a connection log cannot:
   the interaction, while `403` reads as "right door, wrong credentials", so the
   attacker retries with a stolen token. Knowing *which service account* was
   compromised is far more actionable than knowing someone knocked.
+- **`kubelet`** is the more useful of the two Kubernetes ports. A kubelet that
+  trusts anonymous requests lists every pod on the node and then runs a command
+  inside any of them — no cluster credential involved. The command is the
+  capture, and nothing is executed to produce the reply:
+
+  ```
+  kubelet  command  pod=payments-api-7d4f9c8b5-2xk4n
+           cmd=cat /var/run/secrets/kubernetes.io/serviceaccount/token
+  ```
+
+- **`docker`** records the container specification, which is a written-down
+  plan. Nobody bind-mounts `/` into a container by accident, so the `escape`
+  field names the reasons the spec would have handed over the host:
+
+  ```
+  docker  container_create  image=alpine  cmd=chroot /host sh
+          binds=/:/host  privileged=true  escape=host_filesystem privileged
+  ```
+
+  It also decodes `X-Registry-Auth`, which carries a registry username and
+  password in the clear — usually the intruder's own.
+
+- **`imds`** answers on 169.254.169.254 for AWS, GCP and Azure at once. There is
+  no benign reason for an unfamiliar process to ask it for role credentials,
+  which makes this one of the very few honeypot signals with almost no
+  false-positive story. Which cloud's API they reached for says what they
+  believed they had landed on, and an `X-Forwarded-For` on the request says it
+  was an SSRF rather than a foothold. The credentials returned are well-formed
+  and authenticate to nothing — they exist so the request *after* the credential
+  request still happens.
+
+- **`elasticsearch`** is the one decoy deliberately left wide open, because that
+  is what the installed base looks like and because the credential is not the
+  prize here. The query is:
+
+  ```
+  elasticsearch  search_query  index=customers
+                 query={"query":{"match_all":{}},"_source":["email","card_last4"],"size":10000}
+  ```
+
+  A cluster that asked for a password would have produced a 401 in the scanner's
+  log and nothing else. `DELETE /*` followed by a write to `read_me` — the two
+  halves of an Elasticsearch ransom — are recorded as `delete_request` and
+  `write_request`, and neither actually happens.
+
+- **`jenkins`** has the Groovy script console, which turns read access into code
+  execution on the controller. The submitted script says which credential store
+  they already knew to ask for. There is no interpreter behind it.
+
+- **`gitlab`** captures stolen personal access tokens the way `k8s` captures
+  stolen service-account tokens — from the `PRIVATE-TOKEN` header, the `JOB-TOKEN`
+  header, or the query string, which is how they leak in the first place. Public
+  endpoints answer so there is somewhere to point the token; nothing is ever
+  accepted.
+
 - **`mcp`** records the agent's own `clientInfo` (a much stronger identifier
   than a user-agent) and the arguments of every `tools/call`. The advertised
   tools are deliberately tempting, so the one they reach for tells you what they
@@ -99,7 +166,7 @@ a 2026 network, and each captures something a connection log cannot:
        arguments={"query":"SELECT email, credit_card FROM customers LIMIT 5000"}
   ```
 
-Three of these answer instead of refusing, because a plausible reply keeps the
+Several of these answer instead of refusing, because a plausible reply keeps the
 attacker talking and every further message is more intelligence:
 
 - **redis** returns `+OK`, so a scripted takeover runs its whole playbook where
@@ -108,10 +175,20 @@ attacker talking and every further message is more intelligence:
   all four land in your log.
 - **ollama** returns a model list and a refusal message, so the scanner sends a
   real prompt.
+- **kubelet** answers `id` with `uid=0(root)` from a table of eight commands.
+  An intruder whose first command comes back empty concludes the endpoint is
+  broken and leaves; one who sees a root identity sends a second command, and
+  the second command is usually the one that says what they came for.
+- **elasticsearch** returns three fabricated documents rather than zero hits,
+  for the same reason.
 - **ntp** answers ordinary mode 3 client requests.
 
-Nothing is actually granted — no file is written, no command executes, every
-credential is rejected.
+Nothing is actually granted — no file is written, no command executes, no
+container is created, no index is deleted, and every credential is rejected.
+Each of those is covered by a test that fails loudly rather than a comment
+saying it must not happen: the kubelet decoy is sent `touch <path>` and the
+path must not exist afterwards; the Docker decoy is asked to create three
+containers and its inventory must not change.
 
 **`ntp` never answers mode 7 (`monlist`).** Replying would turn the sensor into
 a working DDoS amplifier pointed at whatever address the attacker spoofed. It
@@ -134,11 +211,17 @@ the client sends its proof — a value that can be attacked offline the way a
 captured NetNTLMv2 response can. Nothing is ever accepted; every conversation
 ends in `AuthenticationFailed`.
 
-The Ollama sensor is the one nothing else ships. An unauthenticated inference
-endpoint is a free GPU, a pivot, and — when wired to internal RAG — a data
-exfiltration surface. The emulation answers plausibly instead of erroring,
-because a scanner that gets a model list usually follows up with a real prompt,
-and that prompt tells you what the attacker wanted in their own words.
+**`imds` listens on an ordinary port by default (`8169`), not on
+169.254.169.254.** That address has to exist on the host before anything can
+bind it, so putting it in front of the decoy is a deliberate step —
+`ip addr add 169.254.169.254/32 dev lo` plus a `REDIRECT` rule, both spelled out
+in [`wisp.example.yaml`](wisp.example.yaml).
+
+**Do not take that step on a machine that is itself a cloud instance.** You
+would shadow the real metadata service, and every process on the box that needs
+role credentials would start receiving fabricated ones. The decoy belongs on a
+sensor host that is *not* an EC2/GCE/Azure VM, or on one where you have
+confirmed nothing depends on the real 169.254.169.254.
 
 ## Quick start
 
@@ -158,8 +241,28 @@ Then trip it:
 
 ```bash
 ssh -p 2222 root@localhost
-curl -s localhost:11434/api/tags
+```
+
+```bash
 curl -s localhost:11434/api/generate -d '{"model":"llama3.2","prompt":"cat /etc/shadow","stream":false}'
+```
+
+```bash
+curl -sk https://localhost:10250/pods
+```
+
+```bash
+curl -s localhost:2375/v1.43/containers/create -H 'Content-Type: application/json' \
+  -d '{"Image":"alpine","Cmd":["chroot","/host","sh"],"HostConfig":{"Binds":["/:/host"],"Privileged":true}}'
+```
+
+```bash
+curl -s localhost:9200/customers/_search -H 'Content-Type: application/json' \
+  -d '{"query":{"match_all":{}},"_source":["email","card_last4"],"size":10000}'
+```
+
+```bash
+curl -s localhost:8169/latest/meta-data/iam/security-credentials/app-instance-role
 ```
 
 ## Docker
@@ -547,11 +650,20 @@ internal/event/         the one event type every service emits
 internal/sink/          console + JSONL output, remote delivery, rate limiting
 internal/tlsutil/       decoy certificates, and how a sensor trusts a console
 internal/service/       the Service interface
+  httpdecoy/            the machinery the HTTP-shaped decoys share
+  servicetest/          the harness every emulator is tested with
   sshsvc/               OpenSSH emulation via x/crypto/ssh
   httpsvc/              fake device admin login, plain and behind TLS
   mongosvc/             MongoDB wire protocol and SCRAM capture
   llmnrsvc/             LLMNR poisoning detection (not a decoy)
   ollamasvc/            fake Ollama inference server
+  k8ssvc/               Kubernetes apiserver, and the tokens aimed at it
+  kubeletsvc/           kubelet: pod inventory and in-pod command capture
+  dockersvc/            Docker Engine API and container-escape specs
+  imdssvc/              cloud instance metadata, AWS + GCP + Azure
+  elasticsvc/           open Elasticsearch and the queries run against it
+  jenkinssvc/           Jenkins, including the Groovy script console
+  gitlabsvc/            GitLab, and stolen glpat- access tokens
 internal/console/       UI, auth, retention, TLS termination
   store/                SQLite: events, sensors, operators, sessions
   notify/               email, LINE, webhooks, and alert dedup

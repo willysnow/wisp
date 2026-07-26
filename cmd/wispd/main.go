@@ -23,10 +23,16 @@ import (
 	"github.com/willysnow/wisp/internal/event"
 	"github.com/willysnow/wisp/internal/service"
 	"github.com/willysnow/wisp/internal/service/bannersvc"
+	"github.com/willysnow/wisp/internal/service/dockersvc"
+	"github.com/willysnow/wisp/internal/service/elasticsvc"
 	"github.com/willysnow/wisp/internal/service/ftpsvc"
+	"github.com/willysnow/wisp/internal/service/gitlabsvc"
 	"github.com/willysnow/wisp/internal/service/gitsvc"
 	"github.com/willysnow/wisp/internal/service/httpsvc"
+	"github.com/willysnow/wisp/internal/service/imdssvc"
+	"github.com/willysnow/wisp/internal/service/jenkinssvc"
 	"github.com/willysnow/wisp/internal/service/k8ssvc"
+	"github.com/willysnow/wisp/internal/service/kubeletsvc"
 	"github.com/willysnow/wisp/internal/service/llmnrsvc"
 	"github.com/willysnow/wisp/internal/service/mcpsvc"
 	"github.com/willysnow/wisp/internal/service/mongosvc"
@@ -261,6 +267,28 @@ func buildServices(cfg *config.Config) ([]service.Service, error) {
 			return nil, err
 		}
 		out = append(out, s)
+	}
+	if c := cfg.Services.Kubelet; c.Enabled {
+		s, err := kubeletsvc.New(c.Addr, c.NodeName, c.Cert, c.Key)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	if c := cfg.Services.Docker; c.Enabled {
+		out = append(out, dockersvc.New(c.Addr, c.Version, c.APIVersion))
+	}
+	if c := cfg.Services.IMDS; c.Enabled {
+		out = append(out, imdssvc.New(c.Addr, c.Region, c.Role))
+	}
+	if c := cfg.Services.Elasticsearch; c.Enabled {
+		out = append(out, elasticsvc.New(c.Addr, c.Version, c.ClusterName))
+	}
+	if c := cfg.Services.Jenkins; c.Enabled {
+		out = append(out, jenkinssvc.New(c.Addr, c.Version))
+	}
+	if c := cfg.Services.GitLab; c.Enabled {
+		out = append(out, gitlabsvc.New(c.Addr, c.Version))
 	}
 	if c := cfg.Services.MCP; c.Enabled {
 		out = append(out, mcpsvc.New(c.Addr, c.ServerName, c.Version))

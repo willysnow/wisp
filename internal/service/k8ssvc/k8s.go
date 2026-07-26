@@ -17,24 +17,17 @@ package k8ssvc
 import (
 	"context"
 	"crypto/tls"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/willysnow/wisp/internal/event"
+	"github.com/willysnow/wisp/internal/service/httpdecoy"
 	"github.com/willysnow/wisp/internal/tlsutil"
 )
 
 const name = "k8s"
-
-// tokenLogLimit bounds how much of a bearer token reaches the event log. A
-// service-account JWT is ~800 bytes; the header and claims are at the front, so
-// a prefix is enough to identify the account.
-const tokenLogLimit = 1024
 
 type Service struct {
 	addr    string
@@ -65,98 +58,65 @@ func (s *Service) Name() string { return name }
 func (s *Service) Addr() string { return s.addr }
 
 func (s *Service) Serve(ctx context.Context, ln net.Listener, emit event.Emitter) error {
-	_, dstPort := event.SplitAddr(ln.Addr())
+	rec := httpdecoy.NewRecorder(name, ln, emit)
 
 	// The apiserver is TLS-only; a plaintext listener on 6443 would be an
-	// immediate tell, and kubectl would refuse to talk to it at all.
-	tlsLn := tls.NewListener(ln, &tls.Config{Certificates: []tls.Certificate{s.tlsCert}})
-
-	srv := &http.Server{
-		Handler:           s.handler(dstPort, emit),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      30 * time.Second,
-	}
-	go func() {
-		<-ctx.Done()
-		_ = srv.Close()
-	}()
-
-	if err := srv.Serve(tlsLn); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
-	}
-	return nil
+	// immediate tell, and kubectl would refuse to talk to it at all. It also
+	// asks for a client certificate without requiring one, which is how x509
+	// authentication works — and which hands us the subject of anything the
+	// client chooses to offer.
+	return httpdecoy.Serve(ctx, ln, s.handler(rec), &tls.Config{
+		Certificates: []tls.Certificate{s.tlsCert},
+		ClientAuth:   tls.RequestClientCert,
+		MinVersion:   tls.VersionTLS12,
+	})
 }
 
-func (s *Service) handler(dstPort int, emit event.Emitter) http.Handler {
+func (s *Service) handler(rec *httpdecoy.Recorder) http.Handler {
 	mux := http.NewServeMux()
 
+	// The shared recorder handles the credential: a presented bearer token or
+	// client certificate promotes the event to `auth_attempt`, because someone
+	// using stolen cluster access is a categorically different event from a
+	// scan.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		ev := s.baseEvent(r, dstPort, "resource_access")
+		ev := rec.Event(r, "resource_access")
 
 		switch {
 		case r.URL.Path == "/version":
-			ev.Kind = "probe"
-			emit.Emit(ev)
-			writeJSON(w, http.StatusOK, s.versionInfo())
+			httpdecoy.Promote(&ev, "probe")
+			rec.Emit(ev)
+			httpdecoy.WriteJSON(w, http.StatusOK, s.versionInfo())
 			return
 
 		case r.URL.Path == "/api":
-			ev.Kind = "discovery"
-			emit.Emit(ev)
-			writeJSON(w, http.StatusOK, apiVersions)
+			httpdecoy.Promote(&ev, "discovery")
+			rec.Emit(ev)
+			httpdecoy.WriteJSON(w, http.StatusOK, apiVersions)
 			return
 
 		case r.URL.Path == "/apis":
-			ev.Kind = "discovery"
-			emit.Emit(ev)
-			writeJSON(w, http.StatusOK, apiGroups)
+			httpdecoy.Promote(&ev, "discovery")
+			rec.Emit(ev)
+			httpdecoy.WriteJSON(w, http.StatusOK, apiGroups)
 			return
 
 		case r.URL.Path == "/healthz", r.URL.Path == "/livez", r.URL.Path == "/readyz":
-			ev.Kind = "probe"
-			emit.Emit(ev)
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			_, _ = w.Write([]byte("ok"))
+			httpdecoy.Promote(&ev, "probe")
+			rec.Emit(ev)
+			httpdecoy.WriteText(w, http.StatusOK, "ok")
 			return
 		}
 
 		// Everything else is an attempt to reach a real resource.
 		resource := resourceFrom(r.URL.Path)
 		ev.Data["resource"] = resource
-		emit.Emit(ev)
+		rec.Emit(ev)
 
-		writeJSON(w, http.StatusForbidden, forbidden(resource, r.URL.Path))
+		httpdecoy.WriteJSON(w, http.StatusForbidden, forbidden(resource, r.URL.Path))
 	})
 
 	return mux
-}
-
-func (s *Service) baseEvent(r *http.Request, dstPort int, kind string) event.Event {
-	srcIP, srcPort := event.SplitHostPortString(r.RemoteAddr)
-	ev := event.NewRaw(name, kind, srcIP, srcPort, dstPort)
-	ev.Data["method"] = r.Method
-	ev.Data["path"] = r.URL.RequestURI()
-	ev.Data["user_agent"] = r.UserAgent()
-
-	// The credential. A presented bearer token means someone is using stolen
-	// cluster access, which is a categorically different event from a scan —
-	// so it gets its own kind rather than hiding in the request data.
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		ev.Kind = "auth_attempt"
-		scheme, credential, _ := strings.Cut(auth, " ")
-		ev.Data["auth_scheme"] = scheme
-		ev.Data["token"] = truncate(credential, tokenLogLimit)
-	}
-
-	// A client certificate is the other way in, and identifies the subject
-	// directly.
-	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
-		ev.Kind = "auth_attempt"
-		ev.Data["client_cert_subject"] = r.TLS.PeerCertificates[0].Subject.String()
-	}
-
-	return ev
 }
 
 func (s *Service) versionInfo() map[string]any {
@@ -247,17 +207,4 @@ func buildGroups() []map[string]any {
 		})
 	}
 	return groups
-}
-
-func writeJSON(w http.ResponseWriter, code int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(v)
-}
-
-func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "...[truncated]"
 }

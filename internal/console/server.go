@@ -397,11 +397,18 @@ func withParams(r *http.Request, path, key, value string) string {
 	return path + "?" + q.Encode()
 }
 
-// isCredentialKind reports whether an event carried an offered credential.
-// Those are shown in red: they are the events an operator scans the page for.
+// isCredentialKind reports whether an event turned on a credential — one
+// offered to us, or one taken from us. Those are shown in red: they are the
+// events an operator scans the page for.
 func isCredentialKind(kind string) bool {
 	switch kind {
 	case "login_password", "login_pubkey", "login_form", "login_basic", "auth_attempt":
+		return true
+
+	// Not a credential offered but a credential collected. Nothing benign asks
+	// 169.254.169.254 for the instance role's keys, so this belongs with the
+	// events worth interrupting someone for rather than a tier below them.
+	case "credential_request":
 		return true
 	}
 	return false

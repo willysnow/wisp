@@ -57,9 +57,19 @@ services:
     #   - "2121:2121"    # ftp
     #   - "6379:6379"    # redis
     #   - "8080:8080"    # http
+    #   - "8443:8443"    # https
     #   - "8931:8931"    # mcp
     #   - "11434:11434"  # ollama
     #   - "6443:6443"    # kubernetes api
+    #   - "10250:10250"  # kubelet
+    #   - "2375:2375"    # docker engine api
+    #   - "9200:9200"    # elasticsearch
+    #   - "8081:8081"    # jenkins
+    #   - "8929:8929"    # gitlab
+    #   - "9418:9418"    # git daemon
+    #   - "27017:27017"  # mongodb
+    #   - "8169:8169"    # cloud imds — see wisp.example.yaml before
+    #                    # putting 169.254.169.254 in front of it
     #   - "6969:6969/udp"  # tftp
     #   - "1123:1123/udp"  # ntp
 
