@@ -1,0 +1,220 @@
+name: Release
+
+# Tag-driven. `git tag v0.2.0 && git push origin v0.2.0` is the whole release
+# procedure; everything below is what that tag sets off.
+on:
+  push:
+    tags: ["v*"]
+
+# Read-only by default. The two jobs that need to publish something ask for
+# exactly that, and nothing else in this file can write.
+permissions:
+  contents: read
+
+jobs:
+  # The release must not be built from a commit whose tests were never run. A
+  # tag can be pushed without the branch ever passing CI.
+  verify:
+    name: verify
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - run: go vet ./...
+      - run: go test -count=1 ./...
+
+  build:
+    name: ${{ matrix.goos }}/${{ matrix.goarch }}
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - {goos: linux, goarch: amd64}
+          - {goos: linux, goarch: arm64}
+          - {goos: linux, goarch: arm, goarm: "7"}
+          - {goos: darwin, goarch: amd64}
+          - {goos: darwin, goarch: arm64}
+          - {goos: windows, goarch: amd64}
+          - {goos: freebsd, goarch: amd64}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: |
+          version="${GITHUB_REF_NAME}"
+          ldflags="-s -w -X github.com/willysnow/wisp/internal/build.Version=${version}"
+
+          suffix=""
+          if [ "${GOOS}" = "windows" ]; then suffix=".exe"; fi
+
+          mkdir -p dist/pkg
+          # -trimpath keeps absolute build paths off an operator's disk and
+          # makes the output depend only on the source, not on where CI
+          # happened to check it out.
+          go build -trimpath -ldflags "${ldflags}" -o "dist/pkg/wispd${suffix}" ./cmd/wispd
+          go build -trimpath -ldflags "${ldflags}" -o "dist/pkg/wisp-console${suffix}" ./cmd/wisp-console
+
+      - name: package
+        run: |
+          version="${GITHUB_REF_NAME}"
+          arch="${{ matrix.goarch }}${{ matrix.goarm }}"
+          name="wisp_${version}_${{ matrix.goos }}_${arch}"
+
+          # Ship the example configs and the licence alongside the binaries:
+          # an archive that leaves an operator hunting the repository for
+          # console.example.yaml has not saved them anything.
+          cp README.md LICENSE wisp.example.yaml console.example.yaml dist/pkg/
+
+          # Archive a named directory rather than bare files, so unpacking in a
+          # downloads folder does not scatter four files into it.
+          mv dist/pkg "dist/${name}"
+
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            archive="${name}.zip"
+            (cd dist && zip -q -r "${archive}" "${name}")
+          else
+            archive="${name}.tar.gz"
+            tar -czf "dist/${archive}" -C dist "${name}"
+          fi
+
+          (cd dist && sha256sum "${archive}" > "${name}.sha256" && cat "${name}.sha256")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wisp_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.goarm }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          retention-days: 7
+          if-no-files-found: error
+
+  publish:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+      id-token: write # sign the provenance attestation
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: collect checksums
+        working-directory: dist
+        run: |
+          cat *.sha256 | sort -k2 > SHA256SUMS
+          rm -f *.sha256
+
+          # Verify what is about to be published, rather than trusting that the
+          # build jobs and this one agree about the files.
+          sha256sum -c SHA256SUMS
+          echo
+          cat SHA256SUMS
+
+      # Lets anyone check that these archives came out of this workflow, from
+      # this commit — `gh attestation verify <file> --repo <owner>/<repo>`.
+      # For a tool people deploy to detect intrusions, being able to prove the
+      # download is the build is worth the two lines.
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: "dist/wisp_*"
+
+      - name: create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # A tag with a hyphen (v0.3.0-rc1) is a pre-release. Nobody should
+          # have to guess whether a release candidate is one.
+          prerelease=""
+          case "${GITHUB_REF_NAME}" in
+            *-*) prerelease="--prerelease" ;;
+          esac
+
+          # Ask GitHub for the commit-range changelog, then put the
+          # verification instructions above it. Composing the body here rather
+          # than passing --generate-notes as well keeps the flags unambiguous:
+          # there is exactly one source of the release body.
+          changelog=$(gh api "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="${GITHUB_REF_NAME}" --jq .body)
+
+          notes_file=$(mktemp)
+          cat > "$notes_file" <<'NOTES'
+          ## Verifying this download
+
+          ```
+          sha256sum -c SHA256SUMS --ignore-missing
+          gh attestation verify wisp_*_linux_amd64.tar.gz --repo ${{ github.repository }}
+          ```
+
+          Container images for this release:
+
+          ```
+          docker pull ghcr.io/${{ github.repository }}/sensor:${{ github.ref_name }}
+          docker pull ghcr.io/${{ github.repository }}/console:${{ github.ref_name }}
+          ```
+          NOTES
+
+          printf '\n%s\n' "$changelog" >> "$notes_file"
+
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file "$notes_file" \
+            $prerelease \
+            dist/*
+
+  images:
+    name: container images
+    needs: verify
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: log in to ghcr.io
+        run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: prepare buildx
+        run: docker buildx create --use --name wisp
+
+      # The builder stage is native and Go cross-compiles, so both
+      # architectures are a compile rather than an emulated machine — no QEMU
+      # is set up here on purpose.
+      - name: build and push
+        run: |
+          repo="ghcr.io/${{ github.repository }}"
+          version="${GITHUB_REF_NAME}"
+
+          for target in sensor console; do
+            docker buildx build \
+              --platform linux/amd64,linux/arm64 \
+              --target "$target" \
+              --build-arg "VERSION=${version}" \
+              --tag "${repo}/${target}:${version}" \
+              --tag "${repo}/${target}:latest" \
+              --push .
+          done

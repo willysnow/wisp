@@ -1,0 +1,32 @@
+# Keep the build context to source. Everything here is either irrelevant to the
+# build or must never reach an image layer.
+
+.git/
+.github/
+
+# Operator-local config and state.
+wisp.yaml
+console.yaml
+*.db
+*.db-*
+acme-cache/
+
+# Key material. A certificate baked into a published image is a certificate
+# every user of that image shares.
+*.pem
+
+# Event logs and build output.
+*.jsonl
+*.log
+*.exe
+dist/
+
+# Docs, deployment units, and compose files do not affect the binaries.
+#
+# LICENSE is deliberately not here: publishing an image is a binary
+# redistribution, and BSD-3-Clause asks for the notice to travel with it.
+README.md
+CONTRIBUTING.md
+SECURITY.md
+docker-compose.yml
+deploy/

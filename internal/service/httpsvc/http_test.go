@@ -1,0 +1,167 @@
+package httpsvc
+
+import (
+	"context"
+	"crypto/tls"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/willysnow/wisp/internal/event"
+)
+
+func startTLS(t *testing.T) (base string, client *http.Client, events func() []event.Event) {
+	t.Helper()
+
+	dir := t.TempDir()
+	svc, err := NewTLS("127.0.0.1:0", "nginx/1.18.0 (Ubuntu)", "Administration",
+		filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem"),
+		[]string{"admin.internal", "127.0.0.1"})
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+
+	var mu sync.Mutex
+	var seen []event.Event
+	emit := event.EmitterFunc(func(e event.Event) {
+		mu.Lock()
+		defer mu.Unlock()
+		seen = append(seen, e)
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = svc.Serve(ctx, ln, emit)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	transport := &http.Transport{
+		// The decoy's certificate is self-signed by design; the client here is
+		// standing in for a scanner, which does not check either. Proxy is
+		// disabled so the request cannot be diverted by a local TLS-inspecting
+		// agent, which would replace the certificate and the SNI under test.
+		Proxy:           nil,
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true, ServerName: "admin.internal"},
+	}
+
+	return "https://" + ln.Addr().String(),
+		&http.Client{Transport: transport, Timeout: 5 * time.Second},
+		func() []event.Event {
+			mu.Lock()
+			defer mu.Unlock()
+			return append([]event.Event(nil), seen...)
+		}
+}
+
+// TestTLSDecoyIsItsOwnService: the same panel behind TLS has to report as
+// "https", or an operator cannot tell which of the two doors was tried.
+func TestTLSDecoyIsItsOwnService(t *testing.T) {
+	base, client, events := startTLS(t)
+
+	resp, err := client.Get(base + "/admin")
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if !strings.Contains(string(body), "Administration") {
+		t.Error("the login page was not served over TLS")
+	}
+	if got := resp.Header.Get("Server"); got != "nginx/1.18.0 (Ubuntu)" {
+		t.Errorf("Server = %q, want the configured header", got)
+	}
+
+	ev := events()[0]
+	if ev.Service != "https" {
+		t.Errorf("Service = %q, want https", ev.Service)
+	}
+	if ev.Data["sni"] != "admin.internal" {
+		t.Errorf("sni = %v, want admin.internal — the name they expected to find here",
+			ev.Data["sni"])
+	}
+}
+
+// TestTLSCredentialsAreCaptured — the reason the decoy exists is unchanged by
+// the transport.
+func TestTLSCredentialsAreCaptured(t *testing.T) {
+	base, client, events := startTLS(t)
+
+	resp, err := client.PostForm(base+"/login.cgi", url.Values{
+		"username": {"admin"},
+		"password": {"Summer2026!"},
+	})
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	var login event.Event
+	for _, e := range events() {
+		if e.Kind == "login_form" {
+			login = e
+		}
+	}
+	if login.Kind == "" {
+		t.Fatal("the posted credentials were not captured")
+	}
+	if login.Data["username"] != "admin" || login.Data["password"] != "Summer2026!" {
+		t.Errorf("captured %v / %v, want admin / Summer2026!",
+			login.Data["username"], login.Data["password"])
+	}
+
+	// Never granted, and never a hint about which half was wrong.
+	if !strings.Contains(string(body), "Invalid username or password") {
+		t.Error("the decoy did not answer with its usual refusal")
+	}
+	if strings.Contains(string(body), "no such user") {
+		t.Error("the answer would let an attacker enumerate accounts")
+	}
+}
+
+// TestCertificateIsReused: a certificate that changes on every restart
+// identifies the box as a honeypot to anyone who connects twice.
+func TestCertificateIsReused(t *testing.T) {
+	dir := t.TempDir()
+	cert, key := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+
+	first, err := NewTLS("127.0.0.1:0", "", "", cert, key, []string{"admin.internal"})
+	if err != nil {
+		t.Fatalf("first: %v", err)
+	}
+	second, err := NewTLS("127.0.0.1:0", "", "", cert, key, []string{"admin.internal"})
+	if err != nil {
+		t.Fatalf("second: %v", err)
+	}
+
+	a := first.tlsConfig.Certificates[0].Certificate[0]
+	b := second.tlsConfig.Certificates[0].Certificate[0]
+	if string(a) != string(b) {
+		t.Error("the certificate changed between restarts")
+	}
+}
+
+// TestPlainHTTPUnchanged guards the shared code path: adding TLS must not have
+// renamed the original service.
+func TestPlainHTTPUnchanged(t *testing.T) {
+	if got := New("0.0.0.0:8080", "", "").Name(); got != "http" {
+		t.Errorf("Name() = %q, want http", got)
+	}
+}

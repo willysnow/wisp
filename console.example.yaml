@@ -1,0 +1,180 @@
+# wisp console configuration.
+#
+# Everything here is optional. With no config file the console runs as a plain
+# aggregator: events are stored and visible in the UI, but nobody is told.
+# Copy this to console.yaml to enable notifications.
+
+# TLS. The console terminates it itself — sensors send captured credentials and
+# their bearer tokens, and operators send a password, so nothing here should
+# cross a network in the clear.
+#
+# mode is one of:
+#   off          plain HTTP. Only correct behind a reverse proxy that
+#                terminates TLS for you.
+#   self-signed  generate and keep a certificate. The right answer for a
+#                console on an internal segment with no public name. The
+#                fingerprint is printed at startup — pin it on the sensors
+#                with log.remote.fingerprint.
+#   file         use a certificate you already have.
+#   acme         obtain one automatically from Let's Encrypt. Needs a public
+#                DNS name pointing at this host.
+tls:
+  mode: self-signed
+
+  # Where the certificate lives. In self-signed mode these are generated on
+  # first start and then reused — a certificate that changes every restart is
+  # one nobody can pin.
+  cert_file: console-cert.pem
+  key_file: console-key.pem
+
+  # Names to put in the certificate (self-signed) or obtain it for (acme).
+  # Self-signed with no domains covers this host's name plus loopback.
+  domains:
+    - "console.internal"
+
+  # ACME only. accept_tos records that you accept the CA's terms of service;
+  # issuance will not run without it. cache_dir holds the account key and the
+  # issued certificates — keep it, or every restart re-issues and you will hit
+  # the rate limit.
+  # email: "secops@example.com"
+  # accept_tos: false
+  # cache_dir: "acme-cache"
+  # directory: "https://acme-staging-v02.api.letsencrypt.org/directory"
+
+  # An extra plain-HTTP listener that redirects everything to HTTPS, and in
+  # acme mode also answers the HTTP-01 challenge. Leave it empty to listen on
+  # HTTPS only — ACME then uses TLS-ALPN-01 over 443 and needs no port 80.
+  # http_addr: ":80"
+
+# The operator interface.
+#
+# There is no setting here that turns the login off. The console holds every
+# credential, prompt, and token the fleet has captured — it is a higher-value
+# target than the systems it watches. Manage accounts with
+# `wisp-console user add|list|passwd|remove`; the first one is created and its
+# password printed on the console's first start.
+ui:
+  # How long a login lasts before the operator has to sign in again.
+  session_ttl: 12h
+
+  # Whether cookies are marked Secure: auto, always, or never.
+  #
+  # auto sets it when the request arrived over TLS — directly, or through a
+  # proxy that said so via X-Forwarded-Proto with trust_proxy on. Use always if
+  # your proxy terminates TLS without forwarding that header; never is for
+  # local development and nothing else.
+  secure_cookies: auto
+
+  # Believe X-Forwarded-For and X-Forwarded-Proto.
+  #
+  # Turn this on when — and only when — a reverse proxy you control is in front.
+  # With it off, every request behind a proxy looks like it comes from the proxy
+  # and one attacker's failed logins would lock out the whole team. With it on
+  # and no proxy, the headers are set by whoever is connecting and the login
+  # rate limit becomes decorative.
+  trust_proxy: false
+
+# What the console watches for on the sensors' behalf.
+#
+# A sensor cannot report its own death. If someone finds it and stops it —
+# kills the process, pulls the cable, fills its disk — the last thing it does
+# is go quiet, and a quiet sensor looks exactly like a network where nothing is
+# happening. The console is the only place that can tell those apart, so
+# silence is the one thing here that is alerted on because nothing arrived.
+#
+# The alert is raised once per sensor, and once more when it starts reporting
+# again — whoever was woken at 3am should not have to guess whether it is still
+# down.
+sensors:
+  # How long a sensor may be quiet before it is reported. Empty or 0 disables
+  # the check. Set it above the quietest period you expect: on a segment where
+  # nothing legitimate ever talks to the sensor, that is however long the
+  # sensor's own heartbeat takes, not how often you expect an intrusion.
+  silence_after: 30m
+
+  # How often the check runs.
+  check_interval: 1m
+
+# How much history to keep.
+#
+# With nothing set here the database grows forever, and its size is chosen by
+# whoever is scanning your sensors — a single port scan can write for as long
+# as the disk holds out. The console warns at startup when no policy is set.
+retention:
+  # Maximum age of a stored event. Accepts d and w as well as Go's h/m/s.
+  # Empty or 0 keeps events forever.
+  events: 90d
+
+  # Hard cap on stored events, whatever their age. This is the backstop age
+  # cannot provide: a sensor under sustained scan produces months of events in
+  # an afternoon. The oldest go first. 0 means no cap.
+  max_events: 1000000
+
+  # How often the policy is applied.
+  interval: 1h
+
+notify:
+  # How long a repeated alert stays suppressed. The same source hitting the
+  # same service is one alert, and the next one after the window says how many
+  # were folded in ("+47 similar suppressed").
+  #
+  # This is the setting that decides whether anyone keeps notifications on.
+  window: 15m
+
+  # Which event kinds notify. Omit to use the built-in list: credentials
+  # offered (login_password, auth_attempt, ...) and intent stated (prompt,
+  # tool_call, command, ...). Bare connections and version probes are stored
+  # but not pushed — they are context for an investigation, not a reason to
+  # wake someone at 3am.
+  #
+  # Use ["*"] to notify on everything. Expect to regret it during the first
+  # port scan.
+  # kinds: ["login_password", "auth_attempt", "prompt", "tool_call"]
+
+  email:
+    enabled: false
+    host: "smtp.example.com:587"
+    username: "alerts@example.com"
+    password: "app-password-here"
+    from: "wisp <alerts@example.com>"
+    to:
+      - "secops@example.com"
+
+  # LINE Messaging API. Widely used by operations teams in Taiwan and Japan —
+  # an alert in the channel someone already watches gets acted on.
+  # Requires a channel access token and the destination user/group/room ID.
+  line:
+    enabled: false
+    token: "<channel access token>"
+    to: "<user, group, or room ID>"
+
+  # Syslog. Unlike the sensor's own syslog output, what leaves here has already
+  # been deduplicated and filtered to the kinds worth acting on — a SIEM
+  # receives the alerts someone would have been paged for, not every packet
+  # anyone sent at a honeypot. The suppressed count rides along as "repeated".
+  #
+  # NOTE: alerts contain captured credentials. Use network: tcp+tls if the
+  # collector is not on a network you control.
+  syslog:
+    enabled: false
+    address: "siem.internal:514"
+    network: udp
+    facility: local0
+    tag: wisp-console
+    format: rfc5424
+
+  # Webhooks. format is json, slack, teams, or discord.
+  #
+  # NOTE: alerts contain captured credentials and prompts. A webhook sends them
+  # to whoever operates that endpoint — point these at infrastructure you
+  # control or trust.
+  webhooks:
+    - enabled: false
+      name: slack
+      url: "https://hooks.slack.com/services/XXX/YYY/ZZZ"
+      format: slack
+
+    - enabled: false
+      name: siem
+      url: "https://siem.internal.example.com/ingest/wisp"
+      format: json

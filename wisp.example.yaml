@@ -1,0 +1,202 @@
+# wisp sensor configuration.
+#
+# Every key below is optional — omitting one keeps the built-in default, so the
+# smallest useful config file is an empty one. Copy this to wisp.yaml to edit.
+
+# Identifies this sensor in every emitted event.
+node: wisp-01
+
+log:
+  # JSONL event log. Set to "" to disable file output.
+  file: events.jsonl
+  # Mirror events to stdout in human-readable form.
+  console: true
+
+  # Forward events to a wisp console. Omit the URL to keep this sensor local.
+  # remote:
+  #   url: "https://console.internal:8000"
+  #   token: "wisp_..."          # from `wisp-console sensor add <node>`
+  #
+  #   # A console with a self-signed certificate has to be trusted explicitly.
+  #   # Pin the SHA-256 the console prints at startup (strongest), or point
+  #   # ca_file at its certificate. Without one of these the connection fails,
+  #   # which is the correct default.
+  #   fingerprint: "51:49:55:A1:..."
+  #   # ca_file: console-cert.pem
+  #
+  #   # Sends every captured credential and this sensor's own token to whoever
+  #   # answers the connection. For the first ten minutes of a lab and nothing
+  #   # else.
+  #   # insecure_skip_verify: false
+
+  # Forward every event to a syslog collector — a SIEM, a log shipper, or
+  # anything else that already reads syslog. The message body is the same JSON
+  # this sensor writes to events.jsonl, so whatever parses that parses this.
+  #
+  # Severity carries the meaning: credentials and stated intent arrive as
+  # warnings, everything else as informational, so a collector can route on
+  # level without parsing the body. Nothing is sent above warning — an
+  # intrusion attempt on a honeypot is expected by design, and a sensor that
+  # cried "critical" at every port scan would be filtered out within a week.
+  # syslog:
+  #   enabled: true
+  #   address: "siem.internal:514"
+  #   # udp, tcp, tcp+tls, unix, or unixgram. Use tcp+tls when the events cross
+  #   # a network you do not own: they contain captured credentials.
+  #   network: udp
+  #   facility: local0
+  #   tag: wisp
+  #   # rfc5424 is the modern format. Use rfc3164 only for a collector that
+  #   # cannot accept anything else — it has no year, and second-level
+  #   # precision makes correlating an intrusion harder than it needs to be.
+  #   format: rfc5424
+  #   # auto uses octet counting over TLS (RFC5425 requires it) and newlines
+  #   # elsewhere.
+  #   framing: auto
+  #   max_length: 8192
+  #   # For tcp+tls, the same trust options as the console connection:
+  #   # ca_file: collector-ca.pem
+  #   # fingerprint: "AA:BB:..."
+
+  # How much this sensor will record. Without a limit, an attacker who
+  # identifies the honeypot chooses how much you write: hold the port open and
+  # the sensor fills its own disk and buries the console under deliveries.
+  #
+  # Suppressed events are counted and reported as a `rate_limited` event, so a
+  # flood still shows up as a flood. All values are events per minute; a burst
+  # is how many may arrive at once, so a port scan touching every service lands
+  # in full.
+  rate_limit:
+    enabled: true
+    per_source_per_minute: 60
+    per_source_burst: 30
+    # Credentials and stated intent (login_password, prompt, tool_call, …) get
+    # their own budget, so a flood of bare connections cannot crowd out the one
+    # password that matters.
+    high_value_per_minute: 30
+    high_value_burst: 60
+    # The whole sensor, across every source — the backstop for a distributed
+    # scan where no single address trips its own limit.
+    global_per_minute: 600
+    global_burst: 300
+
+services:
+  # Ports are unprivileged by default so wisp runs without elevation. To catch
+  # scans on the real ports, redirect at the firewall (22 -> 2222) or map them
+  # in Docker. Ports that are already unprivileged sit on their true numbers.
+
+  ssh:
+    enabled: true
+    addr: "0.0.0.0:2222"
+    # Presented to clients. Match it to the OS you are pretending to be — a
+    # Ubuntu banner on a box that fingerprints as Windows is a giveaway.
+    banner: "SSH-2.0-OpenSSH_8.9p1 Ubuntu-3ubuntu0.10"
+    # Generated on first run if absent. Keep it: a host key that changes every
+    # restart identifies the box as a honeypot to anyone who revisits.
+    host_key: hostkey.pem
+
+  http:
+    enabled: true
+    addr: "0.0.0.0:8080"
+    server_header: "nginx/1.18.0 (Ubuntu)"
+    realm: "Administration"
+
+  # The same admin panel behind TLS, reported as its own service so you can
+  # tell which door was tried. It is a separate listener rather than a redirect
+  # because a scanner sweeping 443 never touches 80.
+  https:
+    enabled: true
+    addr: "0.0.0.0:8443"
+    server_header: "nginx/1.18.0 (Ubuntu)"
+    realm: "Administration"
+    # Generated on first run if absent. Keep them: a certificate that changes
+    # every restart is a honeypot fingerprint, and the SANs are part of what an
+    # attacker sees when they look at what this box claims to be.
+    cert: https-cert.pem
+    key: https-key.pem
+    # names: ["vpn.corp.example.com", "10.0.0.20"]
+
+  telnet:
+    enabled: true
+    addr: "0.0.0.0:2323"
+    banner: "Ubuntu 22.04.3 LTS"
+
+  ftp:
+    enabled: true
+    addr: "0.0.0.0:2121"
+    banner: "(vsFTPd 3.0.5)"
+
+  redis:
+    # Answers +OK so a scripted takeover runs its whole playbook in your log.
+    # Nothing is stored and nothing executes.
+    enabled: true
+    addr: "0.0.0.0:6379"
+    version: "7.0.15"
+
+  tftp:
+    enabled: true
+    addr: "0.0.0.0:6969"
+
+  ntp:
+    # Answers ordinary client requests; never answers mode 7 (monlist), which
+    # would make this sensor a DDoS amplifier.
+    enabled: true
+    addr: "0.0.0.0:1123"
+
+  ollama:
+    # 11434 is Ollama's real default and is unprivileged, so this one can sit on
+    # its true port with no redirect.
+    enabled: true
+    addr: "0.0.0.0:11434"
+    version: "0.5.4"
+
+  git:
+    # 9418 is git's own port and is unprivileged. A git client states the full
+    # repository path in its first packet, so the request alone tells you what
+    # naming the intruder already knows.
+    enabled: true
+    addr: "0.0.0.0:9418"
+
+  mongodb:
+    # Emulated with authentication enabled, which is what makes a scanner offer
+    # credentials instead of simply reading. Modern drivers then run SCRAM: the
+    # username arrives in the clear and the client's proof can be attacked
+    # offline. Nothing is ever accepted.
+    enabled: true
+    addr: "0.0.0.0:27017"
+    version: "7.0.14"
+
+  # LLMNR poisoning detection — the one module that is not a decoy, and the one
+  # that sends traffic of its own.
+  #
+  # It multicasts a query for a hostname that does not exist. A correct network
+  # answers with silence; Responder, Inveigh, and every other relay tool answer
+  # everything, because answering everything is how they work. One reply is
+  # proof of an active attacker, from an address that names their machine.
+  #
+  # It never answers an LLMNR query — doing so would be poisoning your own
+  # network, which is the attack this detects.
+  #
+  # Off by default: a sensor should not start putting packets on a network
+  # without someone deciding it should.
+  llmnr:
+    enabled: false
+    # The local socket probes go out from. An ephemeral port is right unless
+    # you need a fixed one for a firewall rule.
+    addr: "0.0.0.0:0"
+    # Empty means a fresh random hostname per probe, which is the better
+    # default: a fixed name is one an attacker who has seen it before can teach
+    # their tool to ignore.
+    hostname: ""
+    interval: 5m
+    splay: 1m
+
+  # Generic TCP catchers for ports that do not warrant a full emulator. They
+  # record the first bytes a client sends — enough to see a scan, but they
+  # cannot capture credentials. Name each one after whatever it is pretending
+  # to be; that name appears in the alert.
+  banners:
+    - enabled: true
+      name: vnc
+      addr: "0.0.0.0:5900"
+      banner: "RFB 003.008\n"

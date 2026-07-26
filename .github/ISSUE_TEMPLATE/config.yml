@@ -1,0 +1,13 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/willysnow/wisp/security/advisories/new
+    about: >-
+      Report privately, never in a public issue. A public report on a detection
+      tool tells the people it detects where to look, while every deployment is
+      still vulnerable.
+
+  - name: Question or idea
+    url: https://github.com/willysnow/wisp/discussions
+    about: For anything that is not a defect or a specific piece of work.

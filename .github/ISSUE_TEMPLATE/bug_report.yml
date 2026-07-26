@@ -1,0 +1,91 @@
+name: Bug report
+description: Something does not work the way it is documented to.
+labels: [bug]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before you paste anything:** logs and configs from a running sensor
+        contain ingest tokens, and event data contains credentials captured
+        from whoever touched your honeypot — often real ones, belonging to
+        third parties. Redact both.
+
+        If this is a security vulnerability, do not file it here. See
+        [SECURITY.md](https://github.com/willysnow/wisp/blob/main/SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `wispd -version` or `wisp-console -version`.
+      placeholder: wispd v0.2.0 (a1b2c3d4e5f6) linux/arm64 go1.25.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Which part
+      options:
+        - Sensor (wispd)
+        - Console (wisp-console)
+        - Both
+        - Container images
+        - Something else
+    validations:
+      required: true
+
+  - type: input
+    id: platform
+    attributes:
+      label: How it is running
+      description: OS and architecture, and whether it is a binary, a container, or systemd.
+      placeholder: Debian 12 on arm64, systemd unit from deploy/systemd
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: Where the documented behaviour is stated, if you know.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: >-
+        The smallest sequence that shows it. If it involves tripping a decoy,
+        the exact client command is the most useful thing you can give.
+      placeholder: |
+        1. Run wispd with this config: ...
+        2. curl -s localhost:11434/api/tags
+        3. events.jsonl contains ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant configuration
+      description: >-
+        The section involved, not the whole file. **Remove every token, password,
+        and captured credential.**
+      render: yaml
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: Startup lines are usually the useful ones. Redact tokens.
+      render: text

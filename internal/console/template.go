@@ -1,0 +1,237 @@
+package console
+
+// indexHTML is the whole operator UI. It is inlined rather than served from an
+// assets directory so the console stays a single binary with nothing to deploy
+// alongside it.
+const indexHTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>wisp console</title>
+<style>
+:root{--bg:#14161a;--panel:#1c1f26;--line:#2a2f39;--fg:#dfe3ea;--dim:#8b95a6;
+--hot:#ff6b6b;--warm:#ffb454;--cool:#5cc8ff;--ok:#5dd39e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+header{padding:16px 20px;border-bottom:1px solid var(--line);
+display:flex;flex-wrap:wrap;gap:16px;align-items:baseline}
+h1{font-size:15px;margin:0;letter-spacing:.5px}
+h1 span{color:var(--dim);font-weight:400}
+.stat{color:var(--dim)}
+.stat b{color:var(--fg);font-weight:600}
+main{padding:20px;display:grid;gap:20px;grid-template-columns:minmax(0,1fr) 260px}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+section{background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);
+margin:0;padding:10px 14px;border-bottom:1px solid var(--line)}
+table{width:100%;border-collapse:collapse}
+td,th{padding:7px 10px;text-align:left;vertical-align:top;
+border-bottom:1px solid var(--line)}
+th{font-size:11px;color:var(--dim);font-weight:500;text-transform:uppercase;letter-spacing:.5px}
+tr:last-child td{border-bottom:0}
+.wrap{overflow-x:auto}
+a{color:var(--cool);text-decoration:none}
+a:hover{text-decoration:underline}
+.t{color:var(--dim);white-space:nowrap}
+.svc{color:var(--cool)}
+.kind{white-space:nowrap}
+.kind.cred{color:var(--hot);font-weight:600}
+.kind.act{color:var(--warm)}
+.src{white-space:nowrap}
+.data{color:var(--dim);word-break:break-word}
+.data i{color:var(--fg);font-style:normal}
+.empty{padding:28px 14px;text-align:center;color:var(--dim)}
+.side table td{font-size:12px}
+.num{text-align:right;color:var(--dim)}
+.bar{display:block;height:2px;background:var(--cool);margin-top:3px;border-radius:1px}
+.filters{padding:10px 14px;border-bottom:1px solid var(--line);color:var(--dim)}
+.filters a{margin-left:8px}
+.dot{color:var(--ok)}
+.dot.stale{color:var(--dim)}
+.who{margin-left:auto;color:var(--dim)}
+.who b{color:var(--fg);font-weight:600}
+form.inline{display:inline;margin-left:10px}
+button.link{background:none;border:0;padding:0;font:inherit;color:var(--cool);cursor:pointer}
+button.link:hover{text-decoration:underline}
+.bar{display:flex;flex-wrap:wrap;gap:10px;align-items:center;
+padding:10px 14px;border-bottom:1px solid var(--line)}
+.bar form{display:flex;gap:6px;flex:1;min-width:200px}
+.bar input[type=search]{flex:1;padding:5px 8px;border-radius:3px;
+border:1px solid var(--line);background:var(--bg);color:var(--fg);font:inherit}
+.bar input[type=search]:focus{outline:none;border-color:var(--cool)}
+.bar button{padding:5px 12px;border:1px solid var(--line);border-radius:3px;
+background:var(--bg);color:var(--fg);font:inherit;cursor:pointer}
+.bar button:hover{border-color:var(--cool);color:var(--cool)}
+.bar .sep{color:var(--dim)}
+.pager{display:flex;gap:14px;align-items:center;padding:10px 14px;color:var(--dim)}
+.pager a{padding:2px 8px;border:1px solid var(--line);border-radius:3px}
+.pager .right{margin-left:auto}
+.silent{color:var(--hot)}
+.dot.silent{color:var(--hot)}
+mark{background:none;color:var(--warm);font-weight:600}
+</style></head><body>
+
+<header>
+  <h1>wisp <span>console</span></h1>
+  <span class="stat"><b>{{.Total}}</b> events / last {{.Since}}</span>
+  <span class="stat"><b>{{len .Sensors}}</b> sensors</span>
+  <span class="who">signed in as <b>{{.User}}</b>
+    <form class="inline" method="post" action="/logout">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button class="link" type="submit">sign out</button>
+    </form>
+  </span>
+</header>
+
+<main>
+  <section>
+    <h2>Events</h2>
+
+    <div class="bar">
+      <form method="get" action="/">
+        <input type="search" name="q" value="{{.Filter.Query}}" autofocus
+               placeholder="Search everything &mdash; username, path, prompt, address">
+        {{/* The other filters ride along, so searching narrows the view
+             instead of replacing it. */}}
+        {{with .Filter.Node}}<input type="hidden" name="node" value="{{.}}">{{end}}
+        {{with .Filter.Service}}<input type="hidden" name="service" value="{{.}}">{{end}}
+        {{with .Filter.Kind}}<input type="hidden" name="kind" value="{{.}}">{{end}}
+        {{with .Filter.SrcIP}}<input type="hidden" name="src_ip" value="{{.}}">{{end}}
+        <input type="hidden" name="hours" value="{{.Hours}}">
+        <button type="submit">Search</button>
+      </form>
+      <span class="sep">export</span>
+      <a href="{{.ExportCSV}}">CSV</a>
+      <a href="{{.ExportJSON}}">JSON</a>
+    </div>
+
+    {{if .Filtered}}
+    <div class="filters">
+      {{.Matched}} matching
+      {{with .Filter.Query}}&middot; search=&ldquo;{{.}}&rdquo;{{end}}
+      {{with .Filter.Node}}&middot; node={{.}}{{end}}
+      {{with .Filter.Service}}&middot; service={{.}}{{end}}
+      {{with .Filter.Kind}}&middot; kind={{.}}{{end}}
+      {{with .Filter.SrcIP}}&middot; src={{.}}{{end}}
+      <a href="/">clear</a>
+    </div>
+    {{end}}
+    <div class="wrap">
+    <table>
+      <tr><th>Time</th><th>Sensor</th><th>Service</th><th>Kind</th><th>Source</th><th>Detail</th></tr>
+      {{range .Events}}
+      <tr>
+        <td class="t">{{.Time.Format "01-02 15:04:05"}}</td>
+        <td><a href="/?node={{.Node}}">{{.Node}}</a></td>
+        <td class="svc"><a href="/?service={{.Service}}">{{.Service}}</a></td>
+        <td class="kind {{if credential .Kind}}cred{{else if highvalue .Kind}}act{{end}}">{{.Kind}}</td>
+        <td class="src"><a href="/?src_ip={{.SrcIP}}">{{.SrcIP}}</a>:{{.SrcPort}} &rarr; :{{.DstPort}}</td>
+        <td class="data">{{range kv .Data}}<i>{{.}}</i>&nbsp; {{end}}</td>
+      </tr>
+      {{else}}
+      <tr><td class="empty" colspan="6">
+        {{if .Filtered}}
+        Nothing matches. Try a wider time window, or <a href="/">clear the filters</a>.
+        {{else}}
+        No events yet. Point a sensor at this console and wait for something to
+        touch it &mdash; silence here is the expected state.
+        {{end}}
+      </td></tr>
+      {{end}}
+    </table>
+    </div>
+
+    {{if gt .Pages 1}}
+    <div class="pager">
+      {{if .PrevURL}}<a href="{{.PrevURL}}">&larr; newer</a>{{end}}
+      <span>page {{.Page}} of {{.Pages}}</span>
+      {{if .NextURL}}<a href="{{.NextURL}}">older &rarr;</a>{{end}}
+      <span class="right">{{.Matched}} events match</span>
+    </div>
+    {{end}}
+  </section>
+
+  <div class="side" style="display:grid;gap:20px;align-content:start">
+    <section>
+      <h2>Sensors</h2>
+      <table>
+        {{range .Sensors}}
+        <tr>
+          <td>
+            <span class="dot{{if .Silent}} silent{{end}}">&bull;</span>
+            <a href="/?node={{.Node}}">{{.Node}}</a><br>
+            {{/* A sensor that has gone quiet is the one thing on this page
+                 that is interesting because nothing happened. */}}
+            <span class="t{{if .Silent}} silent{{end}}">
+              {{if .Silent}}silent {{end}}{{ago .LastSeen}}
+            </span>
+          </td>
+          <td class="num">{{.EventCount}}</td>
+        </tr>
+        {{else}}
+        <tr><td class="empty">No sensors have reported.</td></tr>
+        {{end}}
+      </table>
+    </section>
+
+    <section>
+      <h2>By service</h2>
+      <table>
+        {{range .Counts}}
+        <tr>
+          <td><a href="/?service={{.Service}}">{{.Service}}</a></td>
+          <td class="num">{{.Count}}</td>
+        </tr>
+        {{else}}
+        <tr><td class="empty">&mdash;</td></tr>
+        {{end}}
+      </table>
+    </section>
+  </div>
+</main>
+</body></html>
+`
+
+// loginHTML is the sign-in page. The console holds every credential the fleet
+// has captured, so the UI is behind a login for the same reason ingest is
+// behind a token — locking the front door and leaving the back one open
+// protects nothing.
+const loginHTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>sign in &middot; wisp console</title>
+<style>
+:root{--bg:#14161a;--panel:#1c1f26;--line:#2a2f39;--fg:#dfe3ea;--dim:#8b95a6;
+--hot:#ff6b6b;--cool:#5cc8ff}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;display:grid;place-items:center;
+background:var(--bg);color:var(--fg);
+font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+form{background:var(--panel);border:1px solid var(--line);border-radius:6px;
+padding:26px;width:min(340px,92vw)}
+h1{font-size:15px;margin:0 0 4px;letter-spacing:.5px}
+h1 span{color:var(--dim);font-weight:400}
+p.sub{color:var(--dim);margin:0 0 20px}
+label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:1px;
+color:var(--dim);margin-bottom:5px}
+input{width:100%;margin-bottom:16px;padding:9px 10px;border-radius:4px;
+border:1px solid var(--line);background:var(--bg);color:var(--fg);font:inherit}
+input:focus{outline:none;border-color:var(--cool)}
+button{width:100%;padding:9px;border:0;border-radius:4px;cursor:pointer;
+background:var(--cool);color:#08121a;font:inherit;font-weight:600}
+.err{color:var(--hot);margin:0 0 16px}
+</style></head><body>
+<form method="post" action="/login">
+  <h1>wisp <span>console</span></h1>
+  <p class="sub">Sign in to view captured events.</p>
+  {{with .Error}}<p class="err">{{.}}</p>{{end}}
+  <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+  <input type="hidden" name="next" value="{{.Next}}">
+  <label for="u">Username</label>
+  <input id="u" name="username" autocomplete="username" autofocus required>
+  <label for="p">Password</label>
+  <input id="p" name="password" type="password" autocomplete="current-password" required>
+  <button type="submit">Sign in</button>
+</form>
+</body></html>
+`

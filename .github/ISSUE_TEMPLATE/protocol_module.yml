@@ -1,0 +1,68 @@
+name: Protocol module or decoy
+description: A service wisp should emulate, or a decoy it should ship.
+labels: [protocol]
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Coverage is the gap that matters most right now — wisp emulates 8 of
+        OpenCanary's 21 protocols. The roadmap in the README lists what is
+        known to be missing; this form is for adding to it, or for making the
+        case that something on it should come first.
+
+        If you intend to write it yourself, say so — [CONTRIBUTING.md](https://github.com/willysnow/wisp/blob/main/CONTRIBUTING.md)
+        has the checklist.
+
+  - type: input
+    id: protocol
+    attributes:
+      label: Protocol or service
+      placeholder: MySQL, SMB2, kubelet, Docker socket, cloud IMDS, …
+    validations:
+      required: true
+
+  - type: textarea
+    id: captures
+    attributes:
+      label: What it would capture
+      description: >-
+        The question that decides whether a module is worth building. "Someone
+        connected to port 3306" is a connection log; "this username and this
+        password hash were offered" is an alert. Which is this, and why?
+    validations:
+      required: true
+
+  - type: textarea
+    id: why
+    attributes:
+      label: Why an intruder would touch it
+      description: >-
+        What makes this a thing worth putting on a network as bait — what an
+        attacker is hoping to find when they connect to it.
+    validations:
+      required: true
+
+  - type: textarea
+    id: protocol_detail
+    attributes:
+      label: How far into the protocol it has to go
+      description: >-
+        How much has to be implemented before credentials appear? A handshake,
+        an auth exchange, a full session? Links to the specification or to a
+        reference implementation are welcome.
+
+  - type: textarea
+    id: realism
+    attributes:
+      label: What would give it away
+      description: >-
+        Banners, error text, timing, anything an attacker could compare between
+        two visits. A decoy that is obviously a decoy stops the conversation.
+
+  - type: checkboxes
+    id: offer
+    attributes:
+      label: Are you offering to build it?
+      options:
+        - label: I would like to implement this myself

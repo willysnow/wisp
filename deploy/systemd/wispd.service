@@ -1,0 +1,85 @@
+[Unit]
+Description=wisp honeypot sensor
+Documentation=https://github.com/willysnow/wisp
+After=network-online.target
+Wants=network-online.target
+
+# A sensor that dies quietly is worse than one that never ran: the network it
+# was watching looks clean either way. Give up only if it cannot stay up at all.
+# (These belong in [Unit] — systemd moved them out of [Service] in v230.)
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=exec
+ExecStart=/usr/local/bin/wispd -config /etc/wisp/wisp.yaml
+Restart=on-failure
+RestartSec=5s
+
+User=wisp
+Group=wisp
+
+# systemd creates and owns these, so there is no chown step in the install.
+#   /var/lib/wisp  the SSH host key, decoy certificates, and events.jsonl
+#   /etc/wisp      the configuration, which the service only reads
+StateDirectory=wisp
+ConfigurationDirectory=wisp
+WorkingDirectory=/var/lib/wisp
+
+# --- Sandboxing -----------------------------------------------------------
+#
+# This is the process on the network most likely to be attacked on purpose. It
+# parses hostile input by design, so it runs with as little as a process can
+# have: no capabilities, nothing writable but its own state directory, and no
+# path back to root.
+#
+# The emulators never execute anything and never grant access — that is the
+# first rule of the project — but a unit file should not depend on the code
+# being correct.
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+# Ports are unprivileged by default (2222, 8080, …). To bind the real ones,
+# add CAP_NET_BIND_SERVICE to both lines above — but a firewall redirect keeps
+# the sensor unprivileged, which is the better trade.
+
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateUsers=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RemoveIPC=true
+# Go emits no executable pages at runtime, so this costs nothing here.
+MemoryDenyWriteExecute=true
+
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+# AF_UNIX is not for the network: it is how the process reaches the journal and
+# the local resolver.
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# --- Bounds ---------------------------------------------------------------
+#
+# A honeypot's load is chosen by whoever is scanning it. wisp rate-limits its
+# own events, but the kernel should have the last word.
+LimitNOFILE=8192
+TasksMax=512
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

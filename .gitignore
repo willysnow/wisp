@@ -1,0 +1,22 @@
+# Operator-local config and state — never commit these.
+wisp.yaml
+# Generated key material - the SSH host key and any decoy TLS certificates.
+*.pem
+events.jsonl
+*.jsonl
+*.log
+
+# Build output
+/wispd
+/wisp-console
+*.exe
+/dist/
+
+# Console-local config and state.
+console.yaml
+# ACME account key and issued certificates — credentials, not build output.
+/acme-cache/
+
+# Console database
+wisp-console.db
+wisp-console.db-*

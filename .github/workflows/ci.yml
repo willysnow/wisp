@@ -1,0 +1,173 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Read-only by default. Nothing here publishes anything, and a workflow that
+# cannot write cannot be turned into a supply-chain foothold by a bad pull
+# request.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: vet and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            gofmt -d $unformatted
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go mod tidy is committed
+        run: |
+          go mod tidy
+          git diff --exit-code go.mod go.sum
+
+  test:
+    name: test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # -shuffle catches tests that only pass in the order they were written;
+      # -count=1 stops a cached pass from standing in for a real run.
+      - name: go test
+        run: go test -count=1 -shuffle=on ./...
+
+  race:
+    name: race detector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Every service handles connections in its own goroutine and the sinks
+      # are shared between all of them, so a data race here is a bug that only
+      # shows up under the load a honeypot exists to attract.
+      - name: go test -race
+        run: go test -race -count=1 ./...
+
+  cross:
+    name: build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: linux, goarch: amd64}
+          - {goos: linux, goarch: arm64}
+          - {goos: linux, goarch: arm, goarm: "7"}
+          - {goos: darwin, goarch: arm64}
+          - {goos: windows, goarch: amd64}
+          - {goos: freebsd, goarch: amd64}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # "Anywhere Go cross-compiles" is a claim in the README, so it is checked
+      # on every change rather than discovered by the first person to try it on
+      # a Raspberry Pi.
+      - name: build
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM: ${{ matrix.goarm }}
+        run: go build -trimpath ./...
+
+  vuln:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # A tool people deploy to detect intrusions should not be the way one
+      # arrives. This reports only vulnerabilities in code paths actually
+      # reachable from this module.
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+
+  docker:
+    name: docker images
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Built, not pushed: this proves the Dockerfile still works, and a CI job
+      # that can publish an image is a credential worth attacking.
+      - name: build sensor image
+        run: docker build --target sensor -t wisp/sensor .
+
+      - name: build console image
+        run: docker build --target console -t wisp/console .
+
+      - name: compose file is valid
+        run: docker compose config --quiet
+
+      # The console's own healthcheck, run against a real container: it is what
+      # every orchestrator will use to decide whether the console is alive.
+      - name: console answers its healthcheck
+        run: |
+          docker run -d --name console -p 8000:8000 wisp/console
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format '{{.State.Health.Status}}' console)
+            if [ "$status" = "healthy" ]; then
+              docker rm -f console
+              exit 0
+            fi
+            if [ "$status" = "unhealthy" ]; then
+              break
+            fi
+            sleep 2
+          done
+          echo "console did not become healthy:"
+          docker logs console
+          docker inspect --format '{{json .State.Health}}' console
+          docker rm -f console
+          exit 1

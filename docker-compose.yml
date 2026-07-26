@@ -1,0 +1,81 @@
+# An evaluation stack: one sensor and one console on the same host.
+#
+#   docker compose up --build
+#   docker compose logs console      # the operator password is printed once
+#
+# In a real deployment the console lives somewhere else — the whole point of a
+# sensor is that it sits on a segment you expect to be attacked, and the place
+# your alerts land should not be on it.
+
+name: wisp
+
+services:
+  console:
+    build:
+      context: .
+      target: console
+    image: wisp/console
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    volumes:
+      - console-data:/data
+    # The console is the box holding every captured credential. It runs as a
+    # non-root user out of a read-only image with no shell, and needs no
+    # capability at all.
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # SQLite writes a temporary file when the retention janitor rebuilds the
+    # database, and a read-only root filesystem leaves it nowhere to put one.
+    tmpfs:
+      - /tmp
+
+  sensor:
+    build:
+      context: .
+      target: sensor
+    image: wisp/sensor
+    restart: unless-stopped
+    volumes:
+      - sensor-data:/data
+
+    # Host networking, so the sensor sees the real client address.
+    #
+    # This is not a performance choice. With published ports, Docker can
+    # rewrite the source address to the bridge gateway, and an alert that says
+    # every intrusion came from 172.17.0.1 is an alert nobody can act on. On
+    # Docker Desktop (macOS/Windows) that rewriting is unavoidable, so drop
+    # this line, uncomment the ports below, and treat source IPs as unreliable.
+    network_mode: host
+
+    # ports:
+    #   - "2222:2222"    # ssh
+    #   - "2323:2323"    # telnet
+    #   - "2121:2121"    # ftp
+    #   - "6379:6379"    # redis
+    #   - "8080:8080"    # http
+    #   - "8931:8931"    # mcp
+    #   - "11434:11434"  # ollama
+    #   - "6443:6443"    # kubernetes api
+    #   - "6969:6969/udp"  # tftp
+    #   - "1123:1123/udp"  # ntp
+
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+volumes:
+  # Named rather than bind-mounted so they inherit the image's ownership and
+  # the non-root user can write to them without a chown on the host.
+  #
+  # Both hold state that must survive a restart: the console's database and
+  # accounts, and the sensor's SSH host key and decoy certificates. Key
+  # material that changes on every restart identifies the box as a honeypot to
+  # anyone who connects twice.
+  console-data:
+  sensor-data:
