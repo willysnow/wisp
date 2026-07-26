@@ -685,4 +685,5 @@ than a vulnerability.
 ## Licence
 
 BSD-3-Clause, matching OpenCanary — from which several protocol behaviours were
-studied. See `LICENSE`.
+studied, though none of its code was copied. See `LICENSE` for the terms and
+`NOTICE` for the attribution.

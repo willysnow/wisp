@@ -1,0 +1,18 @@
+wisp
+Copyright (c) 2026, the wisp authors
+
+This product includes no third-party source code, but several protocol
+behaviours were studied from OpenCanary (https://github.com/thinkst/opencanary),
+Copyright (c) 2015, Thinkst Applied Research, which is also licensed under the
+BSD 3-Clause License. The implementations here were written from scratch in Go;
+what was taken was the shape of the idea, and it is acknowledged here because
+that is worth acknowledging.
+
+"Canary" and "Canarytokens" are trademarks of Thinkst Applied Research. wisp is
+an independent project, is not affiliated with or endorsed by Thinkst, and is
+deliberately not named after them.
+
+This attribution lives here rather than in LICENSE so that the licence file
+stays byte-identical to the BSD 3-Clause template — anything inserted into it
+stops automated licence detection from recognising the terms, which serves
+nobody.

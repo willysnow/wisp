@@ -59,7 +59,7 @@ COPY --from=build /out/wisp-console /usr/local/bin/wisp-console
 COPY --from=build --chown=65532:65532 /out/data /data
 # Publishing an image is a binary redistribution, and BSD-3-Clause asks for the
 # notice to travel with it.
-COPY LICENSE /LICENSE
+COPY LICENSE NOTICE /
 
 WORKDIR /data
 USER nonroot
@@ -92,7 +92,7 @@ FROM gcr.io/distroless/static-debian12:nonroot AS sensor
 
 COPY --from=build /out/wispd /usr/local/bin/wispd
 COPY --from=build --chown=65532:65532 /out/data /data
-COPY LICENSE /LICENSE
+COPY LICENSE NOTICE /
 
 WORKDIR /data
 USER nonroot

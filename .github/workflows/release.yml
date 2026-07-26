@@ -98,7 +98,7 @@ jobs:
           # Ship the example configs and the licence alongside the binaries:
           # an archive that leaves an operator hunting the repository for
           # console.example.yaml has not saved them anything.
-          cp README.md LICENSE wisp.example.yaml console.example.yaml dist/pkg/
+          cp README.md LICENSE NOTICE wisp.example.yaml console.example.yaml dist/pkg/
 
           # Archive a named directory rather than bare files, so unpacking in a
           # downloads folder does not scatter four files into it.
