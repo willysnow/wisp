@@ -22,7 +22,16 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # The newest release, not the version in go.mod.
+          #
+          # Standard library vulnerabilities are fixed in patch releases, so
+          # pinning the toolchain to the go directive means CI tests — and the
+          # release binaries — carry the ones that are already fixed.
+          # govulncheck caught exactly that on this repository's first run:
+          # x509 verification, textproto, and TLS findings that came entirely
+          # from the pinned toolchain. go.mod's directive stays what the code
+          # needs; this is what it is built with.
+          go-version: stable
           cache: true
 
       - run: go vet ./...
@@ -48,7 +57,16 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version-file: go.mod
+          # The newest release, not the version in go.mod.
+          #
+          # Standard library vulnerabilities are fixed in patch releases, so
+          # pinning the toolchain to the go directive means CI tests — and the
+          # release binaries — carry the ones that are already fixed.
+          # govulncheck caught exactly that on this repository's first run:
+          # x509 verification, textproto, and TLS findings that came entirely
+          # from the pinned toolchain. go.mod's directive stays what the code
+          # needs; this is what it is built with.
+          go-version: stable
           cache: true
 
       - name: build
