@@ -20,7 +20,7 @@ func startTLS(t *testing.T) (base string, client *http.Client, events func() []e
 	t.Helper()
 
 	dir := t.TempDir()
-	svc, err := NewTLS("127.0.0.1:0", "nginx/1.18.0 (Ubuntu)", "Administration",
+	svc, err := NewTLS("127.0.0.1:0", "nginx/1.18.0 (Ubuntu)", "Administration", "Firmware 2.1.14",
 		filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem"),
 		[]string{"admin.internal", "127.0.0.1"})
 	if err != nil {
@@ -142,11 +142,11 @@ func TestCertificateIsReused(t *testing.T) {
 	dir := t.TempDir()
 	cert, key := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
 
-	first, err := NewTLS("127.0.0.1:0", "", "", cert, key, []string{"admin.internal"})
+	first, err := NewTLS("127.0.0.1:0", "", "", "", cert, key, []string{"admin.internal"})
 	if err != nil {
 		t.Fatalf("first: %v", err)
 	}
-	second, err := NewTLS("127.0.0.1:0", "", "", cert, key, []string{"admin.internal"})
+	second, err := NewTLS("127.0.0.1:0", "", "", "", cert, key, []string{"admin.internal"})
 	if err != nil {
 		t.Fatalf("second: %v", err)
 	}
@@ -161,7 +161,49 @@ func TestCertificateIsReused(t *testing.T) {
 // TestPlainHTTPUnchanged guards the shared code path: adding TLS must not have
 // renamed the original service.
 func TestPlainHTTPUnchanged(t *testing.T) {
-	if got := New("0.0.0.0:8080", "", "").Name(); got != "http" {
+	if got := New("0.0.0.0:8080", "", "", "").Name(); got != "http" {
 		t.Errorf("Name() = %q, want http", got)
+	}
+}
+
+// TestRealmAndFooterReachThePage.
+//
+// They did not, for a while: `realm` was accepted from the config, stored on
+// the service, and never read, so a panel on a box calling itself a DiskStation
+// was still titled "Administration". A login page that contradicts every other
+// port is the inconsistency the device persona exists to remove, and it is only
+// removed if these two strings actually arrive.
+func TestRealmAndFooterReachThePage(t *testing.T) {
+	svc := New("127.0.0.1:0", "nginx", "DiskStation", "DSM 7.2-64570")
+	page := svc.page("")
+
+	for _, want := range []string{
+		"<title>DiskStation</title>",
+		"<h1>DiskStation</h1>",
+		"DSM 7.2-64570",
+	} {
+		if !strings.Contains(page, want) {
+			t.Errorf("login page is missing %q", want)
+		}
+	}
+	if strings.Contains(page, "Administration") || strings.Contains(page, "Firmware 2.1.14") {
+		t.Error("the page still shows the built-in defaults")
+	}
+	if strings.Contains(page, "{{") {
+		t.Errorf("a placeholder was left unsubstituted:\n%s", page)
+	}
+}
+
+// TestRealmIsEscaped. It comes from the config file rather than from an
+// attacker, but it is substituted into HTML, and "the input is trusted today"
+// is how injection bugs are introduced.
+func TestRealmIsEscaped(t *testing.T) {
+	page := New("127.0.0.1:0", "", `NAS<script>alert(1)</script>`, "").page("")
+
+	if strings.Contains(page, "<script>alert(1)</script>") {
+		t.Error("the realm was substituted into the page unescaped")
+	}
+	if !strings.Contains(page, "&lt;script&gt;") {
+		t.Errorf("the realm was not escaped at all:\n%s", page)
 	}
 }

@@ -8,17 +8,43 @@ package config
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/willysnow/wisp/internal/persona"
 	"github.com/willysnow/wisp/internal/syslog"
 )
 
 type Config struct {
 	// Node identifies this sensor in every event it emits.
-	Node     string   `yaml:"node"`
+	Node string `yaml:"node"`
+	// Device is what this sensor pretends to be, on every port at once.
+	Device   Device   `yaml:"device"`
 	Log      Log      `yaml:"log"`
 	Services Services `yaml:"services"`
+}
+
+// Device gives the sensor one identity instead of several.
+//
+// Left to themselves the emulators describe a machine that cannot exist: an
+// Ubuntu SSH daemon in front of an nginx serving a panel called
+// "Administration", with a vsftpd underneath. Any one of those is convincing;
+// together they are a tell, because a real device is one product and every port
+// it answers says that product's name.
+type Device struct {
+	// Persona selects a built-in device. See internal/persona for the list;
+	// an unknown value is an error rather than a silent fallback, because a
+	// typo would otherwise leave the sensor wearing the default clothes while
+	// its operator believed otherwise.
+	Persona string `yaml:"persona"`
+
+	// Name and Desc label the device. They are stamped onto every event when
+	// set, so an alert says what the box was pretending to be. Empty means take
+	// them from the persona; with no persona they are absent from events
+	// entirely, which is what every existing deployment already looks like.
+	Name string `yaml:"name"`
+	Desc string `yaml:"desc"`
 }
 
 type Log struct {
@@ -31,8 +57,67 @@ type Log struct {
 	// Syslog forwards events to a syslog collector — a SIEM, a log shipper,
 	// or anything else that already reads syslog.
 	Syslog syslog.Config `yaml:"syslog"`
+	// HPFeeds publishes events to a honeypot-fleet broker.
+	HPFeeds HPFeeds `yaml:"hpfeeds"`
 	// RateLimit bounds how many events this sensor will record.
 	RateLimit RateLimit `yaml:"rate_limit"`
+	// Rotate bounds how much disk the event log may take.
+	Rotate Rotate `yaml:"rotate"`
+}
+
+// Rotate bounds the size of the JSONL event log.
+//
+// The rate limiter stops a flood arriving faster than the disk can take it. It
+// does not stop a year of ordinary traffic from filling the partition, and a
+// sensor whose disk is full stops recording the intrusion that filled it — the
+// same failure the console's retention policy exists to prevent, at the other
+// end of the pipe.
+type Rotate struct {
+	// MaxSizeMB is the threshold. Zero means the built-in default; -1 disables
+	// rotation, for a deployment that already points logrotate at the file.
+	MaxSizeMB int `yaml:"max_size_mb"`
+
+	// MaxFiles is how many rotated generations to keep beside the live one.
+	// Zero means the built-in default; -1 keeps none.
+	MaxFiles int `yaml:"max_files"`
+}
+
+// rotation defaults, applied when the keys are absent. A fresh install is
+// bounded at roughly half a gigabyte: large enough that a quiet sensor never
+// rotates, small enough that a noisy one cannot fill a small disk unnoticed.
+const (
+	defaultRotateMB    = 100
+	defaultRotateFiles = 5
+)
+
+// MaxSizeBytes is the threshold in bytes, with 0 meaning "use the default" and
+// a negative value meaning "no rotation".
+//
+// Zero has to mean the default rather than "unbounded" for the same reason the
+// rate limiter is on by default: a sensor that only bounds its disk once
+// somebody configures it is unbounded on every deployment that matters. Turning
+// it off stays possible, but it has to be typed.
+func (r Rotate) MaxSizeBytes() int64 {
+	switch {
+	case r.MaxSizeMB < 0:
+		return 0
+	case r.MaxSizeMB == 0:
+		return defaultRotateMB << 20
+	default:
+		return int64(r.MaxSizeMB) << 20
+	}
+}
+
+// Files is how many generations to keep, with the same convention.
+func (r Rotate) Files() int {
+	switch {
+	case r.MaxFiles < 0:
+		return 0
+	case r.MaxFiles == 0:
+		return defaultRotateFiles
+	default:
+		return r.MaxFiles
+	}
 }
 
 // RateLimit bounds event volume, in events per minute.
@@ -62,6 +147,35 @@ type RateLimit struct {
 	// distributed scan where no single address trips its own limit.
 	Global      int `yaml:"global_per_minute"`
 	GlobalBurst int `yaml:"global_burst"`
+}
+
+// HPFeeds publishes to the pub/sub bus honeypot operators share data over — the
+// transport behind the Honeynet Project's collections, and what OpenCanary,
+// Cowrie and Dionaea speak when they feed a shared collector. It is here so a
+// wisp sensor can join an existing fleet rather than sit beside one.
+type HPFeeds struct {
+	Enabled bool `yaml:"enabled"`
+	// Addr is the broker, host:port. The conventional port is 10000.
+	Addr string `yaml:"addr"`
+	// Ident and Secret are the credentials the broker issued. The secret is
+	// never sent — the protocol proves knowledge of it against a nonce.
+	Ident  string `yaml:"ident"`
+	Secret string `yaml:"secret"`
+	// Channel to publish on. Brokers authorise per channel, so this has to be
+	// one the ident may write to.
+	Channel string `yaml:"channel"`
+
+	// TLS wraps the connection. hpfeeds has no transport security of its own
+	// and these messages carry captured credentials, so this belongs on for
+	// anything crossing a network you do not own.
+	TLS bool `yaml:"tls"`
+	// The same two ways of trusting a private certificate the console
+	// connection offers, with the same precedence: fingerprint, then CA file.
+	CAFile      string `yaml:"ca_file"`
+	Fingerprint string `yaml:"fingerprint"`
+	// InsecureSkipVerify sends every captured credential to whoever answers the
+	// connection. For a lab and nothing else.
+	InsecureSkipVerify bool `yaml:"insecure_skip_verify"`
 }
 
 // Remote points a sensor at a console. Delivery is best-effort and never blocks
@@ -124,7 +238,11 @@ type HTTP struct {
 	Enabled      bool   `yaml:"enabled"`
 	Addr         string `yaml:"addr"`
 	ServerHeader string `yaml:"server_header"`
-	Realm        string `yaml:"realm"`
+	// Realm titles the login page, and Footer is the firmware line beneath the
+	// form — the detail that makes a fake panel look maintained rather than
+	// generic.
+	Realm  string `yaml:"realm"`
+	Footer string `yaml:"footer"`
 }
 
 // HTTPS is the same admin-panel decoy as HTTP, behind TLS and reported as its
@@ -134,6 +252,7 @@ type HTTPS struct {
 	Addr         string `yaml:"addr"`
 	ServerHeader string `yaml:"server_header"`
 	Realm        string `yaml:"realm"`
+	Footer       string `yaml:"footer"`
 	// Cert and Key are generated on first run if absent. Keep them: a
 	// certificate that changes every restart is a honeypot fingerprint.
 	Cert string `yaml:"cert"`
@@ -336,12 +455,14 @@ func Default() *Config {
 				Addr:         "0.0.0.0:8080",
 				ServerHeader: "nginx/1.18.0 (Ubuntu)",
 				Realm:        "Administration",
+				Footer:       "Firmware 2.1.14",
 			},
 			HTTPS: HTTPS{
 				Enabled:      true,
 				Addr:         "0.0.0.0:8443",
 				ServerHeader: "nginx/1.18.0 (Ubuntu)",
 				Realm:        "Administration",
+				Footer:       "Firmware 2.1.14",
 				Cert:         "https-cert.pem",
 				Key:          "https-key.pem",
 			},
@@ -481,5 +602,95 @@ func Load(path string) (*Config, bool, error) {
 	if err := yaml.Unmarshal(b, cfg); err != nil {
 		return nil, false, fmt.Errorf("%s: %w", path, err)
 	}
+	if err := cfg.applyPersona(); err != nil {
+		return nil, false, fmt.Errorf("%s: %w", path, err)
+	}
 	return cfg, true, nil
+}
+
+// applyPersona dresses the appliance services in one product's clothes.
+//
+// A field is replaced only if it is still at its built-in default. That rule is
+// what makes the two settings compose: pick a persona for the whole box, then
+// override any single banner your environment needs differently, and the
+// override wins — because once it is set it is no longer the default.
+func (c *Config) applyPersona() error {
+	if c.Device.Persona == "" {
+		return nil
+	}
+
+	p, ok := persona.Lookup(c.Device.Persona)
+	if !ok {
+		// An unknown persona is an error rather than a silent fallback. A typo
+		// would otherwise leave the sensor in the default clothes while its
+		// operator believed it was wearing something else, and nothing about
+		// the running system would say so.
+		return fmt.Errorf("device.persona: unknown persona %q (available: %s)",
+			c.Device.Persona, strings.Join(persona.IDs(), ", "))
+	}
+
+	def := Default()
+	s, d := &c.Services, &def.Services
+	setIfDefault(&s.SSH.Banner, d.SSH.Banner, p.SSHBanner)
+	setIfDefault(&s.HTTP.ServerHeader, d.HTTP.ServerHeader, p.ServerHeader)
+	setIfDefault(&s.HTTP.Realm, d.HTTP.Realm, p.Realm)
+	setIfDefault(&s.HTTP.Footer, d.HTTP.Footer, p.Footer)
+	setIfDefault(&s.HTTPS.ServerHeader, d.HTTPS.ServerHeader, p.ServerHeader)
+	setIfDefault(&s.HTTPS.Realm, d.HTTPS.Realm, p.Realm)
+	setIfDefault(&s.HTTPS.Footer, d.HTTPS.Footer, p.Footer)
+	setIfDefault(&s.FTP.Banner, d.FTP.Banner, p.FTPBanner)
+	setIfDefault(&s.Telnet.Banner, d.Telnet.Banner, p.TelnetBanner)
+
+	if c.Device.Name == "" {
+		c.Device.Name = p.Name
+	}
+	if c.Device.Desc == "" {
+		c.Device.Desc = p.Desc
+	}
+	return nil
+}
+
+// PersonaWarnings reports where the chosen persona and the enabled services
+// disagree about what this machine is.
+//
+// A persona with no banner for a service is saying the real product does not
+// answer that port — a LaserJet has no sshd. The service is left running,
+// because whether to run it is the operator's call and not a config file's, but
+// it is said out loud at startup: an SSH banner announcing Ubuntu on a box
+// whose other ports all say "HP LaserJet" is exactly the inconsistency a
+// persona exists to remove.
+func (c *Config) PersonaWarnings() []string {
+	if c.Device.Persona == "" {
+		return nil
+	}
+	p, ok := persona.Lookup(c.Device.Persona)
+	if !ok {
+		return nil
+	}
+
+	var out []string
+	for _, s := range []struct {
+		name    string
+		enabled bool
+		banner  string
+	}{
+		{"ssh", c.Services.SSH.Enabled, p.SSHBanner},
+		{"ftp", c.Services.FTP.Enabled, p.FTPBanner},
+		{"telnet", c.Services.Telnet.Enabled, p.TelnetBanner},
+	} {
+		if s.enabled && s.banner == "" {
+			out = append(out, fmt.Sprintf(
+				"%s is enabled but a %s does not answer it - its banner still says something else",
+				s.name, p.Desc))
+		}
+	}
+	return out
+}
+
+// setIfDefault replaces a field only when the operator has not chosen it, and
+// only when the persona has something to say about it.
+func setIfDefault(field *string, def, want string) {
+	if *field == def && want != "" {
+		*field = want
+	}
 }

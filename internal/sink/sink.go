@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"sort"
 	"strings"
 	"sync"
@@ -33,9 +32,10 @@ type JSONL struct {
 
 func NewJSONL(w io.Writer) *JSONL { return &JSONL{w: w} }
 
-// NewJSONLFile opens path in append mode. The caller owns closing the file.
-func NewJSONLFile(path string) (*JSONL, *os.File, error) {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+// NewJSONLFile opens path in append mode, rotating it by size. The caller owns
+// closing the returned file.
+func NewJSONLFile(path string, rotate RotateConfig) (*JSONL, *RotatingFile, error) {
+	f, err := OpenRotating(path, rotate)
 	if err != nil {
 		return nil, nil, err
 	}

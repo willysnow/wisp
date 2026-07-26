@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"log"
@@ -67,6 +68,15 @@ func main() {
 		logger.Printf("loaded config from %s", *cfgPath)
 	} else {
 		logger.Printf("no config at %s - running on defaults", *cfgPath)
+	}
+	if d := cfg.Device; d.Persona != "" {
+		logger.Printf("device: %s (%s)", d.Desc, d.Persona)
+	}
+	// Said out loud rather than silently corrected: whether to run a service is
+	// the operator's call, but a banner contradicting the rest of the disguise
+	// is worth knowing about.
+	for _, w := range cfg.PersonaWarnings() {
+		logger.Printf("device: WARNING %s", w)
 	}
 
 	emit, closeSinks, err := buildEmitter(cfg)
@@ -152,7 +162,10 @@ func buildEmitter(cfg *config.Config) (event.Emitter, func(), error) {
 		sinks = append(sinks, sink.NewConsole(os.Stdout))
 	}
 	if cfg.Log.File != "" {
-		s, f, err := sink.NewJSONLFile(cfg.Log.File)
+		s, f, err := sink.NewJSONLFile(cfg.Log.File, sink.RotateConfig{
+			MaxSize:  cfg.Log.Rotate.MaxSizeBytes(),
+			MaxFiles: cfg.Log.Rotate.Files(),
+		})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -166,6 +179,30 @@ func buildEmitter(cfg *config.Config) (event.Emitter, func(), error) {
 		}
 		sinks = append(sinks, s)
 		closers = append(closers, func() { _ = s.Close() })
+	}
+	if c := cfg.Log.HPFeeds; c.Enabled {
+		var tlsCfg *tls.Config
+		if c.TLS {
+			var err error
+			tlsCfg, err = tlsutil.ClientConfig(c.CAFile, c.Fingerprint, c.InsecureSkipVerify)
+			if err != nil {
+				return nil, nil, fmt.Errorf("hpfeeds: %w", err)
+			}
+			if tlsCfg == nil {
+				// System roots. ClientConfig returns nil to mean "net/http's
+				// own default is fine", which a raw tls.Dial cannot use.
+				tlsCfg = &tls.Config{MinVersion: tls.VersionTLS12}
+			}
+		}
+		hp := sink.NewHPFeeds(sink.HPFeedsOptions{
+			Addr:    c.Addr,
+			Ident:   c.Ident,
+			Secret:  c.Secret,
+			Channel: c.Channel,
+			TLS:     tlsCfg,
+		})
+		sinks = append(sinks, hp)
+		closers = append(closers, hp.Close)
 	}
 	if u := cfg.Log.Remote.URL; u != "" {
 		r := cfg.Log.Remote
@@ -197,9 +234,27 @@ func buildEmitter(cfg *config.Config) (event.Emitter, func(), error) {
 		closers = append([]func(){limiter.Close}, closers...)
 	}
 
-	node := cfg.Node
+	// The node name and, when a persona is in use, what this sensor claims to
+	// be. Services never have to know either: an alert can say "the intrusion
+	// hit the box pretending to be the DiskStation" without anyone looking up
+	// the deployment.
+	//
+	// Both device fields are absent unless configured, so an existing
+	// deployment's events do not change shape.
+	node, device := cfg.Node, cfg.Device
 	emit := event.EmitterFunc(func(e event.Event) {
 		e.Node = node
+		if device.Name != "" || device.Desc != "" {
+			if e.Data == nil {
+				e.Data = map[string]any{}
+			}
+			if device.Name != "" {
+				e.Data["device_name"] = device.Name
+			}
+			if device.Desc != "" {
+				e.Data["device_desc"] = device.Desc
+			}
+		}
 		out.Emit(e)
 	})
 
@@ -234,10 +289,10 @@ func buildServices(cfg *config.Config) ([]service.Service, error) {
 		out = append(out, s)
 	}
 	if c := cfg.Services.HTTP; c.Enabled {
-		out = append(out, httpsvc.New(c.Addr, c.ServerHeader, c.Realm))
+		out = append(out, httpsvc.New(c.Addr, c.ServerHeader, c.Realm, c.Footer))
 	}
 	if c := cfg.Services.HTTPS; c.Enabled {
-		s, err := httpsvc.NewTLS(c.Addr, c.ServerHeader, c.Realm, c.Cert, c.Key, c.Names)
+		s, err := httpsvc.NewTLS(c.Addr, c.ServerHeader, c.Realm, c.Footer, c.Cert, c.Key, c.Names)
 		if err != nil {
 			return nil, err
 		}

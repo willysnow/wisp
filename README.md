@@ -43,7 +43,7 @@ plus 9 decoys OpenCanary does not have.
 | Still missing | — | SMB, RDP, MySQL, MSSQL, VNC, SNMP, SIP, HTTP proxy, portscan |
 | SMB | yes, via external Samba | **not implemented** |
 | Cloud / container / CI / LLM decoys | no | **yes** (`k8s`, `kubelet`, `docker`, `imds`, `elasticsearch`, `jenkins`, `gitlab`, `ollama`, `mcp`) |
-| Alerting | file, syslog, HPFeeds, email, webhook, + separate dedup daemon | JSONL, syslog, email, LINE, webhook (Slack/Teams/Discord), **dedup built in** |
+| Alerting | file, syslog, HPFeeds, email, webhook, + separate dedup daemon | JSONL, syslog, HPFeeds, email, LINE, webhook (Slack/Teams/Discord), **dedup built in** |
 | Fleet console | none | **included, self-hosted** |
 | Install | Python + Twisted + Scapy (+ Samba for SMB) | one static binary |
 | Platforms | Linux-first, root for several modules | anywhere Go cross-compiles |
@@ -222,6 +222,45 @@ would shadow the real metadata service, and every process on the box that needs
 role credentials would start receiving fabricated ones. The decoy belongs on a
 sensor host that is *not* an EC2/GCE/Azure VM, or on one where you have
 confirmed nothing depends on the real 169.254.169.254.
+
+## One device, not several
+
+Left to themselves the emulators describe a machine that cannot exist: an
+Ubuntu SSH daemon in front of an nginx serving a panel called
+"Administration", with a vsftpd underneath. Any one of those is convincing.
+Together they are a tell, because a real device on a real network is one
+product, and every port it answers says that product's name.
+
+```yaml
+device:
+  persona: synology
+```
+
+That renames the banners of `ssh`, `http`, `https`, `ftp` and `telnet` at once,
+so an intruder who touches three ports gets three answers that agree — down to
+the title on the login page and the firmware string under the form. Built in:
+`ubuntu` (the default, so selecting it changes nothing), `synology`, `qnap`,
+`truenas`, `hp-printer`.
+
+Anything set explicitly under `services:` still wins, so you can take a whole
+device and then correct the one banner your environment needs differently.
+
+Two honest limits:
+
+- **It stops at the appliance services.** A Synology NAS does not run a
+  Kubernetes apiserver either, so the persona deliberately leaves the cloud,
+  container and CI decoys alone rather than swapping a small inconsistency for a
+  larger one. A sensor running both sets is already describing two machines; run
+  two sensors if that matters.
+- **A persona with nothing to say about a port says so.** A LaserJet has no
+  sshd, so `persona: hp-printer` with `ssh` enabled warns at startup instead of
+  quietly leaving an Ubuntu banner on a box whose every other port says HP.
+  Whether to run the service is still your call.
+
+When `device.name` or `device.desc` is set — a persona fills both in — they are
+stamped onto every event, so an alert says what the box was pretending to be
+without anyone having to look up the deployment. With no persona configured
+neither appears, and the events are exactly the shape they always were.
 
 ## Quick start
 
@@ -640,6 +679,69 @@ address can only ever spend its own allowance, so it cannot silence the rest of
 the network. The source table is bounded too, because an attacker rotating
 addresses is the same denial of service by another route.
 
+### Log rotation
+
+Rate limiting stops a flood arriving faster than the disk can take it. It does
+not stop a year of ordinary traffic from filling the partition, and a sensor
+whose disk is full stops recording the intrusion that filled it — the same
+failure the console's retention policy prevents, at the other end of the pipe.
+
+```yaml
+log:
+  file: events.jsonl
+  rotate:
+    max_size_mb: 100
+    max_files: 5
+```
+
+On by default at those values, for the same reason the rate limiter is: a sensor
+that only bounds its disk once somebody configures it is unbounded on every
+deployment that matters. Set `max_size_mb: -1` if logrotate or journald already
+manages the file — two rotators fighting over one file is worse than either
+alone.
+
+Rotation is by rename, oldest first: `events.jsonl.5` is removed, `.4` becomes
+`.5`, and the live file becomes `.1`, so `events.jsonl` is always the one to
+tail. The size check happens *before* each write rather than after, which is
+what keeps a record whole: the JSONL sink hands over one complete line at a
+time, so a line always lands in exactly one file. Rotating afterwards would
+leave the tail of a JSON object in one file and nothing in the next, and a
+half-written object is a parse error in whatever you pointed at the log.
+
+### HPFeeds
+
+Events can also be published to an [hpfeeds][hpfeeds] broker — the pub/sub bus
+honeypot operators share data over, and what OpenCanary, Cowrie and Dionaea
+speak when they feed a shared collector. It is here so a wisp sensor can join an
+existing fleet rather than sit beside one.
+
+```yaml
+log:
+  hpfeeds:
+    enabled: true
+    addr: "broker.internal:10000"
+    ident: "wisp-01"
+    secret: "..."
+    channel: "wisp.events"
+    tls: true
+```
+
+The payload is the same JSON object `events.jsonl` holds, so a collector pointed
+at both does not need two parsers. The secret is never sent — the broker
+announces a nonce and the client proves it knows the secret by hashing the two
+together — but that protects the credential and nothing else: the events
+themselves carry captured passwords, so `tls: true` belongs on for anything
+leaving a network you own. It trusts a private certificate the same two ways the
+console connection does, by fingerprint or CA file.
+
+Delivery is best-effort on the same contract as the console sink. `Emit` never
+blocks, a full queue drops events and counts them, and a broker that goes away is
+reconnected to with backoff. A service goroutine held up because a collector is
+slow is a service that answers the network late, and a hung service is a
+detectable tell.
+
+[hpfeeds]: https://hpfeeds.org/
+
 ## Layout
 
 ```
@@ -647,7 +749,9 @@ cmd/wispd/              sensor entry point, service wiring, signal handling
 cmd/wisp-console/       console server, sensor/user CLI, healthcheck
 internal/config/        sensor YAML config with defaults-first loading
 internal/event/         the one event type every service emits
-internal/sink/          console + JSONL output, remote delivery, rate limiting
+internal/persona/       the device this sensor claims to be, on every port
+internal/sink/          console + JSONL output with rotation, remote delivery,
+                        hpfeeds, rate limiting
 internal/tlsutil/       decoy certificates, and how a sensor trusts a console
 internal/service/       the Service interface
   httpdecoy/            the machinery the HTTP-shaped decoys share
@@ -686,6 +790,21 @@ to try it on a Raspberry Pi. (It has already earned its keep: the Ollama decoy's
 model sizes were untyped constants larger than a 32-bit `int`, so the sensor did
 not build for `linux/arm` at all.) Both container images are built — never
 pushed — and the console is started to confirm it answers its own healthcheck.
+
+Almost every test here binds a loopback listener. On a Windows machine running
+endpoint security software, the first connection to a freshly built test binary
+can stall for exactly the ten-second header timeout and then fail with `EOF` — a
+different test each run, moving around, and most often one of the TLS ones. It
+is the scanner touching each new binary's first socket rather than a race in the
+code. Serialising the packages makes it much less frequent, though not
+impossible:
+
+```bash
+go test ./... -p 1
+```
+
+If you see it, re-run before investigating. The same suite is green on all three
+platforms in CI, where nothing is inspecting the sockets.
 
 ### Releasing
 
@@ -746,7 +865,7 @@ as anything other than a demo.
       and the *account name* used, not just "someone touched the share"
 - [x] Alerting parity: email, webhook, LINE, and alert dedup
 - [x] Syslog output, from the sensor and from the console
-- [ ] HPFeeds sink
+- [x] HPFeeds sink
 
 **Going past it**
 
@@ -757,9 +876,14 @@ as anything other than a demo.
 - [x] Per-sensor ingest tokens, enrollment, and revocation
 - [x] Console UI authentication and event retention
 - [x] Console search, pagination, CSV/JSON export, and sensor-silence alerting
-- [ ] kubelet, Docker socket, and cloud IMDS decoys
+- [x] kubelet, Docker socket, cloud IMDS, Elasticsearch, Jenkins and
+      GitLab decoys
 - [x] TLS termination in the console itself (self-signed, file, or ACME)
 - [x] Sensor-side rate limiting with reported suppression
+- [x] Event-log rotation, so the sensor's disk is not sized by whoever is
+      scanning it
+- [x] Device personas — one identity across every port, instead of each
+      service inventing its own
 - [ ] TCP/IP stack fingerprint shaping (defeating `nmap -O` needs nfqueue or
       eBPF; user-space Go cannot change TTL or window size)
 - [ ] **Token service** — DNS/HTTP callback, Word docs, kubeconfig, MCP configs.

@@ -10,6 +10,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"html"
 	"net"
 	"net/http"
 	"os"
@@ -34,11 +35,25 @@ type Service struct {
 	addr         string
 	serverHeader string
 	realm        string
+	footer       string
 	tlsConfig    *tls.Config
 }
 
-func New(addr, serverHeader, realm string) *Service {
-	return &Service{name: name, addr: addr, serverHeader: serverHeader, realm: realm}
+// New builds the decoy. realm titles the login page and footer is the firmware
+// line beneath the form; between them they are what makes this panel look like
+// a particular device rather than a generic one, which is why the device
+// persona sets both.
+func New(addr, serverHeader, realm, footer string) *Service {
+	if realm == "" {
+		realm = "Administration"
+	}
+	return &Service{
+		name:         name,
+		addr:         addr,
+		serverHeader: serverHeader,
+		realm:        realm,
+		footer:       footer,
+	}
 }
 
 // NewTLS is the same decoy behind TLS, reported as a separate service so an
@@ -48,7 +63,7 @@ func New(addr, serverHeader, realm string) *Service {
 // two attract different traffic: a scanner sweeping 443 never touches 80, and
 // the certificate itself is part of the disguise — the SANs are what an
 // attacker sees when they look at what this box claims to be.
-func NewTLS(addr, serverHeader, realm, certPath, keyPath string, names []string) (*Service, error) {
+func NewTLS(addr, serverHeader, realm, footer, certPath, keyPath string, names []string) (*Service, error) {
 	if len(names) == 0 {
 		// Whatever the machine calls itself. A device's own admin panel
 		// presenting a certificate for its hostname is the ordinary case.
@@ -64,7 +79,7 @@ func NewTLS(addr, serverHeader, realm, certPath, keyPath string, names []string)
 		return nil, fmt.Errorf("https certificate: %w", err)
 	}
 
-	s := New(addr, serverHeader, realm)
+	s := New(addr, serverHeader, realm, footer)
 	s.name = tlsName
 	s.tlsConfig = &tls.Config{
 		Certificates: []tls.Certificate{cert},
@@ -148,13 +163,27 @@ func (s *Service) handler(dstPort int, emit event.Emitter) http.Handler {
 		// does not exist. Both would let the attacker enumerate.
 		if ev.Kind == "login_form" || ev.Kind == "login_basic" {
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(strings.Replace(loginPage, "{{ERROR}}",
-				`<p class="err">Invalid username or password.</p>`, 1)))
+			_, _ = w.Write([]byte(s.page(`<p class="err">Invalid username or password.</p>`)))
 			return
 		}
-		_, _ = w.Write([]byte(strings.Replace(loginPage, "{{ERROR}}", "", 1)))
+		_, _ = w.Write([]byte(s.page("")))
 	})
 	return mux
+}
+
+// page renders the login form under this device's name.
+//
+// The realm and footer are substituted rather than hardcoded because a panel
+// titled "Administration" on a box whose every other port says "DiskStation" is
+// the inconsistency the device persona exists to remove. Attacker-supplied text
+// never reaches this — realm and footer come from the config file, and the only
+// other substitution is a fixed error string chosen here.
+func (s *Service) page(errorBlock string) string {
+	return strings.NewReplacer(
+		"{{REALM}}", html.EscapeString(s.realm),
+		"{{FOOTER}}", html.EscapeString(s.footer),
+		"{{ERROR}}", errorBlock,
+	).Replace(loginPage)
 }
 
 // credentialsFrom pulls a username/password pair out of a posted form,
@@ -181,7 +210,7 @@ func credentialsFrom(r *http.Request) (user, pass string, ok bool) {
 const loginPage = `<!doctype html>
 <html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Administration</title>
+<title>{{REALM}}</title>
 <style>
 body{font:14px/1.5 -apple-system,Segoe UI,Roboto,sans-serif;background:#eef1f4;margin:0;
 display:flex;min-height:100vh;align-items:center;justify-content:center}
@@ -195,7 +224,7 @@ button{width:100%;margin-top:20px;padding:9px;background:#2c5282;color:#fff;bord
 .foot{color:#9fb3c8;font-size:11px;text-align:center;margin-top:18px}
 </style></head><body>
 <form class="box" method="post" action="/login.cgi">
-<h1>Administration</h1>
+<h1>{{REALM}}</h1>
 <p class="sub">Please sign in to continue.</p>
 <label for="username">Username</label>
 <input id="username" name="username" autocomplete="off">
@@ -203,6 +232,6 @@ button{width:100%;margin-top:20px;padding:9px;background:#2c5282;color:#fff;bord
 <input id="password" name="password" type="password" autocomplete="off">
 <button type="submit">Sign in</button>
 {{ERROR}}
-<p class="foot">Firmware 2.1.14</p>
+<p class="foot">{{FOOTER}}</p>
 </form></body></html>
 `

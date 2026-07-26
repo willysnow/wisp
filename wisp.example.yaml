@@ -6,6 +6,39 @@
 # Identifies this sensor in every emitted event.
 node: wisp-01
 
+# What this sensor pretends to be, on every port at once.
+#
+# Left to themselves the emulators describe a machine that cannot exist: an
+# Ubuntu SSH daemon in front of an nginx serving a panel called
+# "Administration", with a vsftpd underneath. Any one of those is convincing.
+# Together they are a tell, because a real device on a real network is one
+# product, and every port it answers says that product's name.
+#
+# Setting a persona renames the banners of ssh, http, https, ftp and telnet so
+# an intruder who touches three ports gets three answers that agree. Available:
+# ubuntu (the built-in default, so selecting it changes nothing), synology,
+# qnap, truenas, hp-printer.
+#
+# It deliberately does not touch the cloud, container and CI decoys — a Synology
+# NAS does not run a Kubernetes apiserver either, and dressing one up as the
+# other would swap a small inconsistency for a larger one. A sensor running both
+# sets is already describing two machines; run two sensors if that matters.
+#
+# Anything you set explicitly under `services:` wins over the persona, so you
+# can take a whole device and then correct the one banner your environment needs
+# differently.
+#
+# Off by default: the built-in banners are what every existing deployment
+# already presents, and changing what a running sensor claims to be is a
+# decision, not a default.
+# device:
+#   persona: synology
+#   # Labels for this device. Empty takes them from the persona. When either is
+#   # set they are stamped onto every event, so an alert says what the box was
+#   # pretending to be without anyone looking up the deployment.
+#   name: "nas-fileshare-02"
+#   desc: "Synology DiskStation DS220j, DSM 7.2"
+
 log:
   # JSONL event log. Set to "" to disable file output.
   file: events.jsonl
@@ -58,6 +91,47 @@ log:
   #   # ca_file: collector-ca.pem
   #   # fingerprint: "AA:BB:..."
 
+  # Publish to an hpfeeds broker — the pub/sub bus honeypot operators share
+  # data over, and what OpenCanary, Cowrie and Dionaea speak when they feed a
+  # shared collector. This is here so a wisp sensor can join an existing fleet
+  # rather than sit beside one.
+  #
+  # The payload is the same JSON object events.jsonl holds, so a collector
+  # pointed at both does not need two parsers.
+  #
+  # The secret is never sent: the broker announces a random nonce and the
+  # client proves it knows the secret by hashing the two together. That
+  # protects the credential and nothing else — the events themselves cross the
+  # wire in the clear, and they contain captured passwords. Turn on tls for
+  # anything leaving a network you own.
+  # hpfeeds:
+  #   enabled: true
+  #   addr: "broker.internal:10000"
+  #   ident: "wisp-01"
+  #   secret: "..."
+  #   channel: "wisp.events"
+  #   tls: true
+  #   # The same two ways of trusting a private certificate the console
+  #   # connection offers, with the same precedence.
+  #   # fingerprint: "AA:BB:..."
+  #   # ca_file: broker-ca.pem
+
+  # How much disk the event log may take.
+  #
+  # The rate limit below stops a flood arriving faster than the disk can take
+  # it. It does not stop a year of ordinary traffic from filling the partition,
+  # and a sensor whose disk is full stops recording the intrusion that filled
+  # it. Rotation is by rename, oldest first: events.jsonl.5 is removed, .4
+  # becomes .5, and the live file becomes .1 — so events.jsonl is always the
+  # one to tail.
+  #
+  # The defaults below bound a fresh install at roughly half a gigabyte. Set
+  # max_size_mb to -1 if logrotate or journald already manages this file; two
+  # rotators fighting over one file is worse than either alone.
+  rotate:
+    max_size_mb: 100
+    max_files: 5
+
   # How much this sensor will record. Without a limit, an attacker who
   # identifies the honeypot chooses how much you write: hold the port open and
   # the sensor fills its own disk and buries the console under deliveries.
@@ -99,7 +173,11 @@ services:
     enabled: true
     addr: "0.0.0.0:8080"
     server_header: "nginx/1.18.0 (Ubuntu)"
+    # realm titles the login page; footer is the firmware line beneath the form.
+    # Both are what make a fake panel look like a particular device rather than
+    # a generic one, which is why `device.persona` sets them.
     realm: "Administration"
+    footer: "Firmware 2.1.14"
 
   # The same admin panel behind TLS, reported as its own service so you can
   # tell which door was tried. It is a separate listener rather than a redirect
@@ -109,6 +187,7 @@ services:
     addr: "0.0.0.0:8443"
     server_header: "nginx/1.18.0 (Ubuntu)"
     realm: "Administration"
+    footer: "Firmware 2.1.14"
     # Generated on first run if absent. Keep them: a certificate that changes
     # every restart is a honeypot fingerprint, and the SANs are part of what an
     # attacker sees when they look at what this box claims to be.
