@@ -40,6 +40,7 @@ import (
 	"github.com/willysnow/wisp/internal/service/ntpsvc"
 	"github.com/willysnow/wisp/internal/service/ollamasvc"
 	"github.com/willysnow/wisp/internal/service/redissvc"
+	"github.com/willysnow/wisp/internal/service/smbsvc"
 	"github.com/willysnow/wisp/internal/service/sshsvc"
 	"github.com/willysnow/wisp/internal/service/telnetsvc"
 	"github.com/willysnow/wisp/internal/service/tftpsvc"
@@ -353,6 +354,9 @@ func buildServices(cfg *config.Config) ([]service.Service, error) {
 	}
 	if c := cfg.Services.MongoDB; c.Enabled {
 		out = append(out, mongosvc.New(c.Addr, c.Version))
+	}
+	if c := cfg.Services.SMB; c.Enabled {
+		out = append(out, smbsvc.New(c.Addr, c.ComputerName, c.DomainName))
 	}
 	if c := cfg.Services.LLMNR; c.Enabled {
 		interval, err := parseDuration("services.llmnr.interval", c.Interval)

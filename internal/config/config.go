@@ -223,6 +223,7 @@ type Services struct {
 	MCP           MCP           `yaml:"mcp"`
 	Git           Git           `yaml:"git"`
 	MongoDB       MongoDB       `yaml:"mongodb"`
+	SMB           SMB           `yaml:"smb"`
 	LLMNR         LLMNR         `yaml:"llmnr"`
 	Banners       []Banner      `yaml:"banners"`
 }
@@ -275,6 +276,20 @@ type MongoDB struct {
 	Enabled bool   `yaml:"enabled"`
 	Addr    string `yaml:"addr"`
 	Version string `yaml:"version"`
+}
+
+// SMB emulates a file server through the NTLM handshake, which is what makes a
+// client hand over a NetNTLMv2 hash — the native answer to the one thing
+// OpenCanary needs an external Samba install to do.
+type SMB struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	// ComputerName and DomainName are what the server calls itself in the NTLM
+	// challenge the client hashes against. Empty falls back to a plain file
+	// server; the device persona sets them so a NAS on 445 agrees with the NAS
+	// on every other port.
+	ComputerName string `yaml:"computer_name"`
+	DomainName   string `yaml:"domain_name"`
 }
 
 // LLMNR is a detector, not a decoy: it asks the network to resolve a hostname
@@ -571,6 +586,15 @@ func Default() *Config {
 				Addr:    "0.0.0.0:27017",
 				Version: "7.0.14",
 			},
+			SMB: SMB{
+				// 445 is privileged, so wisp binds an unprivileged port and the
+				// operator redirects 445 to it — the same pattern as ssh on
+				// 2222. See wisp.example.yaml.
+				Enabled:      true,
+				Addr:         "0.0.0.0:4445",
+				ComputerName: "FILESERVER",
+				DomainName:   "WORKGROUP",
+			},
 			LLMNR: LLMNR{
 				// Off by default. It is the one module that sends traffic of
 				// its own, and a sensor should not start doing that on a
@@ -640,6 +664,8 @@ func (c *Config) applyPersona() error {
 	setIfDefault(&s.HTTPS.Footer, d.HTTPS.Footer, p.Footer)
 	setIfDefault(&s.FTP.Banner, d.FTP.Banner, p.FTPBanner)
 	setIfDefault(&s.Telnet.Banner, d.Telnet.Banner, p.TelnetBanner)
+	setIfDefault(&s.SMB.ComputerName, d.SMB.ComputerName, p.SMBComputer)
+	setIfDefault(&s.SMB.DomainName, d.SMB.DomainName, p.SMBDomain)
 
 	if c.Device.Name == "" {
 		c.Device.Name = p.Name

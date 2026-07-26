@@ -47,6 +47,8 @@ func TestPersonaDressesEveryApplianceService(t *testing.T) {
 		{"https.realm", cfg.Services.HTTPS.Realm, want.Realm},
 		{"ftp.banner", cfg.Services.FTP.Banner, want.FTPBanner},
 		{"telnet.banner", cfg.Services.Telnet.Banner, want.TelnetBanner},
+		{"smb.computer_name", cfg.Services.SMB.ComputerName, want.SMBComputer},
+		{"smb.domain_name", cfg.Services.SMB.DomainName, want.SMBDomain},
 	} {
 		if c.got != c.want {
 			t.Errorf("%s = %q, want %q", c.field, c.got, c.want)

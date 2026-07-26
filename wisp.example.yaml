@@ -351,6 +351,29 @@ services:
     addr: "0.0.0.0:27017"
     version: "7.0.14"
 
+  # An SMB2/3 file server, emulated through the NTLM handshake — the native
+  # answer to the one thing OpenCanary needs an external Samba install with a
+  # full_audit VFS module to do. A client that reaches a share authenticates
+  # with NTLMv2 first, so the server issues a challenge and the client answers
+  # with a value that cracks offline: the capture is a NetNTLMv2 hash and the
+  # account name, ready for hashcat mode 5600. Nothing is ever accepted; every
+  # authentication ends in a logon failure, so no share is ever served.
+  smb:
+    enabled: true
+    # 445 is privileged, so wisp binds an unprivileged port by default and you
+    # redirect 445 to it — the same pattern as ssh on 2222:
+    #
+    #   iptables -t nat -A PREROUTING -p tcp --dport 445 -j REDIRECT --to-port 4445
+    #
+    # Windows itself holds 445 open, so on a Windows sensor this decoy is for a
+    # segment reached through that redirect rather than the host's own port.
+    addr: "0.0.0.0:4445"
+    # What the server calls itself in the NTLM challenge — the name an intruder
+    # sees on 445. The device persona sets these, so a NAS answers SMB as the
+    # same box its web UI claims to be. NetBIOS names are uppercase, <=15 chars.
+    computer_name: "FILESERVER"
+    domain_name: "WORKGROUP"
+
   # LLMNR poisoning detection — the one module that is not a decoy, and the one
   # that sends traffic of its own.
   #

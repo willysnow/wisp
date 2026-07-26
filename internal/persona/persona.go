@@ -45,6 +45,13 @@ type Persona struct {
 
 	FTPBanner    string
 	TelnetBanner string
+
+	// SMBComputer and SMBDomain are what the SMB server calls itself in the
+	// NTLM challenge. The computer name is the one an intruder sees on 445, so
+	// a NAS whose web UI says DiskStation should not answer SMB as FILESERVER.
+	// Empty means the service keeps its own configured value.
+	SMBComputer string
+	SMBDomain   string
 }
 
 // personas are the devices wisp can dress up as.
@@ -67,6 +74,8 @@ var personas = []Persona{
 		Footer:       "Firmware 2.1.14",
 		FTPBanner:    "(vsFTPd 3.0.5)",
 		TelnetBanner: "Ubuntu 22.04.3 LTS",
+		SMBComputer:  "SRV-APP-01",
+		SMBDomain:    "WORKGROUP",
 	},
 	{
 		ID:           "synology",
@@ -78,6 +87,8 @@ var personas = []Persona{
 		Footer:       "Synology DiskStation Manager 7.2-64570",
 		FTPBanner:    "DiskStation FTP server ready.",
 		TelnetBanner: "Synology DiskStation DSM 7.2-64570",
+		SMBComputer:  "DISKSTATION",
+		SMBDomain:    "WORKGROUP",
 	},
 	{
 		ID:           "qnap",
@@ -89,6 +100,8 @@ var personas = []Persona{
 		Footer:       "QTS 5.1.0.2444",
 		FTPBanner:    "QNAP FTP Server Ready.",
 		TelnetBanner: "QNAP Turbo NAS QTS 5.1.0",
+		SMBComputer:  "NAS4A21B8",
+		SMBDomain:    "WORKGROUP",
 	},
 	{
 		// A printer is the most-overlooked box on any office network: it has an
@@ -115,6 +128,8 @@ var personas = []Persona{
 		Footer:       "TrueNAS SCALE 23.10.2",
 		FTPBanner:    "Welcome to TrueNAS FTP",
 		TelnetBanner: "TrueNAS SCALE 23.10.2",
+		SMBComputer:  "TRUENAS",
+		SMBDomain:    "WORKGROUP",
 	},
 }
 

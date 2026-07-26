@@ -9,7 +9,7 @@ the query, the container spec, or the paths the intruder tried.
 > "Canarytokens" are Thinkst trademarks, and this project is an independent
 > reimplementation rather than a fork or a successor.
 
-> **Status: early.** `wisp` covers 12 of OpenCanary's 21 protocol modules and
+> **Status: early.** `wisp` covers 13 of OpenCanary's 21 protocol modules and
 > is not yet a replacement for it — see [Honest comparison](#honest-comparison)
 > before you deploy it.
 
@@ -33,15 +33,15 @@ at all.
 
 ## Honest comparison
 
-OpenCanary ships 21 protocol modules. `wisp` has reimplemented **12** of them,
+OpenCanary ships 21 protocol modules. `wisp` has reimplemented **13** of them,
 plus 9 decoys OpenCanary does not have.
 
 | | OpenCanary | wisp today |
 |---|---|---|
-| Protocol modules | 21 | **12** + 9 new decoys |
-| Implemented here | — | `ssh`, `http`, `https`, `telnet`, `ftp`, `redis`, `tftp`, `ntp`, `git`, `mongodb`, `llmnr`, TCP banner |
-| Still missing | — | SMB, RDP, MySQL, MSSQL, VNC, SNMP, SIP, HTTP proxy, portscan |
-| SMB | yes, via external Samba | **not implemented** |
+| Protocol modules | 21 | **13** + 9 new decoys |
+| Implemented here | — | `ssh`, `http`, `https`, `telnet`, `ftp`, `redis`, `tftp`, `ntp`, `git`, `mongodb`, `smb`, `llmnr`, TCP banner |
+| Still missing | — | RDP, MySQL, MSSQL, VNC, SNMP, SIP, HTTP proxy, portscan |
+| SMB | yes, via external Samba | **native** — no Samba, captures NetNTLMv2 |
 | Cloud / container / CI / LLM decoys | no | **yes** (`k8s`, `kubelet`, `docker`, `imds`, `elasticsearch`, `jenkins`, `gitlab`, `ollama`, `mcp`) |
 | Alerting | file, syslog, HPFeeds, email, webhook, + separate dedup daemon | JSONL, syslog, HPFeeds, email, LINE, webhook (Slack/Teams/Discord), **dedup built in** |
 | Fleet console | none | **included, self-hosted** |
@@ -71,6 +71,7 @@ deploying a honeypot at all.
 | `ntp` | 1123/udp | client requests, and **mode 7 `monlist` amplification recon** |
 | `git` | 9418/tcp | the **repository path** requested, and whether they meant to push |
 | `mongodb` | 27017/tcp | usernames and **SCRAM proofs that crack offline**, driver and app name |
+| `smb` | 445/tcp | **NetNTLMv2 hashes** and the account name — hashcat 5600, no Samba |
 | `llmnr` | outbound | **an active poisoner on the segment**, and the address it claims |
 | banner | any | first bytes sent, for ports without a real emulator |
 | `ollama` | 11434/tcp | **model-list recon, and the actual prompts sent to your "GPU"** |
@@ -210,6 +211,36 @@ the driver then runs SCRAM, which hands over the username immediately and — on
 the client sends its proof — a value that can be attacked offline the way a
 captured NetNTLMv2 response can. Nothing is ever accepted; every conversation
 ends in `AuthenticationFailed`.
+
+**`smb` is that same NetNTLMv2 capture, done natively.** It is the module that
+answers "why not just run OpenCanary": OpenCanary's SMB is not OpenCanary at all
+but an external Samba install with a `full_audit` VFS module writing to syslog
+for it to tail — the ugliest link in its dependency chain, and the reason a lot
+of people never get it running. Here it is one static binary. A client that
+reaches a share authenticates with NTLMv2 first, so the server issues a
+challenge and the client answers with an HMAC over it keyed by the password;
+choose the challenge yourself — a fixed one, the way Responder does — and the
+answer is a credential that cracks offline:
+
+```
+smb  auth_attempt  username=jsmith  domain=CORP  workstation=WKS-4021
+     netntlmv2=jsmith::CORP:1122334455667788:<NTproof>:<blob>
+```
+
+That line is hashcat mode 5600, ready to paste. Choosing the challenge does not
+weaken anyone — the credential captured is the intruder's, and knowing the
+challenge does not help attack the server that issued it. Nothing is ever
+granted: every authentication ends in `STATUS_LOGON_FAILURE`, so the session
+never completes and there is no share, no tree connect, and no file operation
+to get wrong. The property that matters most has an executable proof — a test
+computes a genuine NTLMv2 response for a known password, captures it through the
+decoy, and then cracks the captured line back to that password, because a hash
+that does not crack is not the deliverable.
+
+`smb` binds an unprivileged port by default (`4445`) and you redirect 445 to it,
+the same pattern as `ssh` on 2222. On a Windows sensor, where the OS holds 445
+open itself, the decoy is for a segment reached through that redirect rather
+than the host's own port.
 
 **`imds` listens on an ordinary port by default (`8169`), not on
 169.254.169.254.** That address has to exist on the host before anything can
@@ -759,6 +790,7 @@ internal/service/       the Service interface
   sshsvc/               OpenSSH emulation via x/crypto/ssh
   httpsvc/              fake device admin login, plain and behind TLS
   mongosvc/             MongoDB wire protocol and SCRAM capture
+  smbsvc/               SMB2/3 and NTLMv2 hash capture, no external Samba
   llmnrsvc/             LLMNR poisoning detection (not a decoy)
   ollamasvc/            fake Ollama inference server
   k8ssvc/               Kubernetes apiserver, and the tokens aimed at it
@@ -861,7 +893,7 @@ as anything other than a demo.
 - [ ] Port-scan detection (OpenCanary drives iptables; a cross-platform version
       needs pcap instead)
 - [ ] RDP — X.224 alone catches the connection; NLA is needed for credentials
-- [ ] Native SMB2/3 with NTLMSSP — no external Samba. Captures NetNTLMv2 hashes
+- [x] Native SMB2/3 with NTLMSSP — no external Samba. Captures NetNTLMv2 hashes
       and the *account name* used, not just "someone touched the share"
 - [x] Alerting parity: email, webhook, LINE, and alert dedup
 - [x] Syslog output, from the sensor and from the console
