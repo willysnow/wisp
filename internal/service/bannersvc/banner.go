@@ -3,9 +3,9 @@
 //
 // It optionally sends a banner, records whatever the client says first, and
 // hangs up. That is enough to detect a port scan or a targeted probe, and it
-// covers the long tail — VNC, MSSQL, MongoDB, a printer port — without writing
-// a parser for each. Where a real emulator exists, prefer it: this one cannot
-// capture credentials.
+// covers the long tail — RDP, a printer port, a database admin console — without
+// writing a parser for each. Where a real emulator exists, prefer it: this one
+// cannot capture credentials.
 package bannersvc
 
 import (

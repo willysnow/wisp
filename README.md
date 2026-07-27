@@ -9,7 +9,7 @@ the query, the container spec, or the paths the intruder tried.
 > "Canarytokens" are Thinkst trademarks, and this project is an independent
 > reimplementation rather than a fork or a successor.
 
-> **Status: early.** `wisp` covers 13 of OpenCanary's 21 protocol modules and
+> **Status: early.** `wisp` covers 18 of OpenCanary's 21 protocol modules and
 > is not yet a replacement for it — see [Honest comparison](#honest-comparison)
 > before you deploy it.
 
@@ -33,14 +33,14 @@ at all.
 
 ## Honest comparison
 
-OpenCanary ships 21 protocol modules. `wisp` has reimplemented **13** of them,
+OpenCanary ships 21 protocol modules. `wisp` has reimplemented **18** of them,
 plus 9 decoys OpenCanary does not have.
 
 | | OpenCanary | wisp today |
 |---|---|---|
-| Protocol modules | 21 | **13** + 9 new decoys |
-| Implemented here | — | `ssh`, `http`, `https`, `telnet`, `ftp`, `redis`, `tftp`, `ntp`, `git`, `mongodb`, `smb`, `llmnr`, TCP banner |
-| Still missing | — | RDP, MySQL, MSSQL, VNC, SNMP, SIP, HTTP proxy, portscan |
+| Protocol modules | 21 | **18** + 9 new decoys |
+| Implemented here | — | `ssh`, `http`, `https`, `telnet`, `ftp`, `redis`, `tftp`, `ntp`, `git`, `mongodb`, `mysql`, `mssql`, `smb`, `vnc`, `sip`, HTTP proxy, `llmnr`, TCP banner |
+| Still missing | — | RDP, SNMP, portscan |
 | SMB | yes, via external Samba | **native** — no Samba, captures NetNTLMv2 |
 | Cloud / container / CI / LLM decoys | no | **yes** (`k8s`, `kubelet`, `docker`, `imds`, `elasticsearch`, `jenkins`, `gitlab`, `ollama`, `mcp`) |
 | Alerting | file, syslog, HPFeeds, email, webhook, + separate dedup daemon | JSONL, syslog, HPFeeds, email, LINE, webhook (Slack/Teams/Discord), **dedup built in** |
@@ -50,8 +50,9 @@ plus 9 decoys OpenCanary does not have.
 
 The generic TCP banner catcher covers any additional port at connection level —
 enough to see a scan or a probe, but it cannot capture credentials the way a
-real emulator does. VNC still ships as a banner catcher and is counted as
-missing above, because that is what it is.
+real emulator does. It ships pointed at RDP by default, which has no native
+emulator yet: X.224 catches the connection, but capturing a hash there needs
+NLA/CredSSP.
 
 If you need full coverage today, run OpenCanary. Run `wisp` if you want the LLM
 decoy, or if the Python/Samba dependency chain is what is stopping you from
@@ -71,7 +72,12 @@ deploying a honeypot at all.
 | `ntp` | 1123/udp | client requests, and **mode 7 `monlist` amplification recon** |
 | `git` | 9418/tcp | the **repository path** requested, and whether they meant to push |
 | `mongodb` | 27017/tcp | usernames and **SCRAM proofs that crack offline**, driver and app name |
+| `mysql` | 3306/tcp | usernames and **native-password responses that crack offline** — hashcat 11200 |
+| `mssql` | 1433/tcp | usernames and the **cleartext password itself** — TDS obfuscation is reversible, not a hash |
 | `smb` | 445/tcp | **NetNTLMv2 hashes** and the account name — hashcat 5600, no Samba |
+| `vnc` | 5900/tcp | the **VNC-auth challenge-response** — cracks offline, John the Ripper `vnc` |
+| `sip` | 5060/udp | the **REGISTER digest** — cracks offline (hashcat 11400), plus scanner recon |
+| `http-proxy` | 3128/tcp | the **tunnel target** (SSRF/open-proxy intent) and cleartext proxy creds |
 | `llmnr` | outbound | **an active poisoner on the segment**, and the address it claims |
 | banner | any | first bytes sent, for ports without a real emulator |
 | `ollama` | 11434/tcp | **model-list recon, and the actual prompts sent to your "GPU"** |
@@ -212,6 +218,28 @@ the client sends its proof — a value that can be attacked offline the way a
 captured NetNTLMv2 response can. Nothing is ever accepted; every conversation
 ends in `AuthenticationFailed`.
 
+**`mysql` captures a crackable password response, the same shape as `smb` and
+`mongodb`.** The server issues a random scramble and the client answers with a
+value keyed by the password; recorded together they crack offline as hashcat
+mode 11200. The decoy advertises `mysql_native_password` rather than MySQL 8's
+default `caching_sha2_password` on purpose — native's response is a clean value a
+wordlist can attack, while caching_sha2 needs TLS or an RSA exchange to carry the
+secret and yields nothing crackable — and switches a client that offers a
+different plugin onto native, the way a real server does. A test computes a
+genuine response for a known password and cracks the captured line back to it, so
+a hash that does not crack fails the build. Every login ends in access denied.
+
+**`mssql` goes one better and recovers the cleartext password.** A TDS client
+opens by negotiating encryption; the decoy answers "not supported", which a
+willing client accepts by sending its `LOGIN7` — password included — in the
+clear. A `LOGIN7` password is not hashed, only obfuscated with a fixed,
+reversible nibble-swap-and-XOR, so what comes out is the password itself, logged
+as a `login_password` event like any other cleartext credential. The one case it
+cannot open is a client that requires TLS or uses Windows authentication — the
+first needs a certificate the decoy does not have, the second carries an NTLM
+blob rather than a password — and those are recorded as attempts with whatever
+the login named, but no password. Every login ends in error 18456.
+
 **`smb` is that same NetNTLMv2 capture, done natively.** It is the module that
 answers "why not just run OpenCanary": OpenCanary's SMB is not OpenCanary at all
 but an external Samba install with a `full_audit` VFS module writing to syslog
@@ -241,6 +269,40 @@ that does not crack is not the deliverable.
 the same pattern as `ssh` on 2222. On a Windows sensor, where the OS holds 445
 open itself, the decoy is for a segment reached through that redirect rather
 than the host's own port.
+
+**`vnc` is the same challenge-response capture on 5900.** It was a banner catcher
+until it learned to do the RFB handshake, and the change is the same one that
+separates `mongodb` from a connection log: the decoy offers *only* VNC
+Authentication, never "None", so a client cannot connect without returning the
+DES-encrypted challenge. Record the challenge next to the response and the pair
+cracks offline with John the Ripper's `vnc` format — there is no clean hashcat
+mode for it, because the DES key is the password with its bits reversed, over two
+blocks. Every attempt ends in a security-result failure, so no framebuffer is
+ever served. Like `mysql` and `smb`, the load-bearing property has a test that
+computes a real response for a known password and cracks the captured line back
+to it.
+
+**`sip` looks like a live PBX so a scanner escalates.** It is the protocol
+sipvicious and friendly-scanner sweep for, and the decoy plays the part: it
+answers OPTIONS with 200 OK — which is exactly how `svmap` decides a box is a
+real PBX worth attacking — and challenges REGISTER with a digest nonce it chose
+and recorded. When the client answers, the username, realm, nonce, method, URI
+and response are captured together as a hashcat-11400 line (also John's SIP
+format). A test verifies both halves of that: that the captured components
+re-derive the response from a known password, and that the assembled line splits
+the URI so hashcat computes the same HA2 the client did. It runs on UDP, only
+answers well-formed SIP, and its reply is the size of the request, so it is not
+an amplifier. Every credential ends in 403.
+
+**`http-proxy` catches the pivot.** An intruder scans for an open proxy to borrow
+someone else's egress, and the request itself is the signal: a CONNECT to
+169.254.169.254 or an internal address is an SSRF hop through the decoy, and an
+absolute-form `GET http://…` is an open-proxy checker confirming the relay works.
+The decoy records the target and answers 407 — never opening the connection,
+because a sensor that made outbound requests on an intruder's behalf would be an
+actual relay. The 407 also does what a closed proxy does: it invites credentials,
+and a `Proxy-Authorization: Basic` header is base64, not a hash, so what comes out
+is the cleartext proxy password, logged as `login_password`.
 
 **`imds` listens on an ordinary port by default (`8169`), not on
 169.254.169.254.** That address has to exist on the host before anything can
@@ -790,7 +852,12 @@ internal/service/       the Service interface
   sshsvc/               OpenSSH emulation via x/crypto/ssh
   httpsvc/              fake device admin login, plain and behind TLS
   mongosvc/             MongoDB wire protocol and SCRAM capture
+  mysqlsvc/             MySQL handshake and native-password hash capture
+  mssqlsvc/             MSSQL/TDS handshake and cleartext LOGIN7 password capture
   smbsvc/               SMB2/3 and NTLMv2 hash capture, no external Samba
+  vncsvc/               RFB handshake and VNC-auth challenge-response capture
+  sipsvc/               SIP over UDP, REGISTER digest capture (hashcat 11400)
+  proxysvc/             HTTP forward proxy: tunnel target and cleartext creds
   llmnrsvc/             LLMNR poisoning detection (not a decoy)
   ollamasvc/            fake Ollama inference server
   k8ssvc/               Kubernetes apiserver, and the tokens aimed at it
@@ -889,7 +956,16 @@ as anything other than a demo.
 
 - [x] Easy protocols, first batch: TCP banner, telnet, FTP, TFTP, NTP, redis
 - [x] Easy protocols, remainder: git, LLMNR, MongoDB, HTTPS
-- [ ] Medium protocols: MySQL, MSSQL, VNC, SIP, HTTP proxy, SNMP
+- [x] MySQL and MSSQL — both capture a credential that survives the connection:
+      MySQL a native-password response that cracks offline (hashcat 11200), MSSQL
+      the cleartext LOGIN7 password itself, since TDS only obfuscates it
+- [x] VNC — real RFB handshake, not a banner catcher: offers only VNC
+      Authentication so the client returns the DES challenge-response, captured
+      as a John-the-Ripper `vnc` line that cracks offline
+- [x] SIP and HTTP proxy — SIP answers OPTIONS to look like a live PBX and
+      captures the REGISTER digest (hashcat 11400); the HTTP proxy records the
+      CONNECT/absolute-form target and captures cleartext proxy credentials
+- [ ] Medium protocols, remainder: SNMP
 - [ ] Port-scan detection (OpenCanary drives iptables; a cross-platform version
       needs pcap instead)
 - [ ] RDP — X.224 alone catches the connection; NLA is needed for credentials
@@ -936,7 +1012,7 @@ as anything other than a demo.
 
 ## Contributing
 
-The most useful contribution is a protocol module — the gap between 8 and 21 is
+The most useful contribution is a protocol module — the gap between 18 and 21 is
 what stops this being usable as anything other than a demo. The checklist, and
 the constraints every change has to respect, are in
 [CONTRIBUTING.md](CONTRIBUTING.md).

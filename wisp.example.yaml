@@ -351,6 +351,37 @@ services:
     addr: "0.0.0.0:27017"
     version: "7.0.14"
 
+  mysql:
+    # Emulated with authentication required, which is what makes a client hand
+    # over its password response instead of simply querying. The server issues a
+    # random scramble and the client answers with a value keyed by the password;
+    # recorded together they crack offline as hashcat mode 11200. The decoy
+    # advertises mysql_native_password (and switches a caching_sha2 client to it)
+    # because that plugin's response is the one a wordlist can attack. Nothing is
+    # ever accepted; every login ends in access denied.
+    enabled: true
+    # 3306 is MySQL's real port and is already unprivileged, so no redirect.
+    addr: "0.0.0.0:3306"
+    # The server build reported in the handshake — the first thing a client and
+    # every fingerprinting tool reads.
+    version: "8.0.36"
+
+  mssql:
+    # A Microsoft SQL Server, emulated through the TDS handshake. The decoy tells
+    # the client it cannot do TLS, so a willing client sends its LOGIN7 — password
+    # included — in the clear. A TDS password is only lightly obfuscated, not
+    # hashed, so unlike the other database decoys this one recovers the cleartext
+    # password itself. A client that requires encryption or uses Windows auth is
+    # recorded as an attempt but yields no password. Every login ends in error
+    # 18456, the code for a failed login.
+    enabled: true
+    # 1433 is SQL Server's real port and is already unprivileged.
+    addr: "0.0.0.0:1433"
+    version: "16.0.1000"
+    # What the server calls itself in the login-error token — the @@SERVERNAME a
+    # client reads back. Match it to the device persona.
+    server_name: "SQLSERVER"
+
   # An SMB2/3 file server, emulated through the NTLM handshake — the native
   # answer to the one thing OpenCanary needs an external Samba install with a
   # full_audit VFS module to do. A client that reaches a share authenticates
@@ -373,6 +404,47 @@ services:
     # same box its web UI claims to be. NetBIOS names are uppercase, <=15 chars.
     computer_name: "FILESERVER"
     domain_name: "WORKGROUP"
+
+  vnc:
+    # An RFB server that offers only VNC Authentication — never "None" — so a
+    # client has to return the DES challenge-response. The server sends a random
+    # challenge and records it next to the response; together they crack offline
+    # with John the Ripper's `vnc` format. Unlike a banner catcher on 5900, this
+    # captures a credential rather than just the connection. Every attempt ends
+    # in a security-result failure.
+    enabled: true
+    # 5900 is VNC's real port and is already unprivileged.
+    addr: "0.0.0.0:5900"
+    # The RFB protocol version offered first, which decides the security
+    # handshake. "3.8", "3.7" and "3.3" are the ones in the wild.
+    version: "3.8"
+
+  sip:
+    # A VoIP server on UDP, the protocol sipvicious and friendly-scanner sweep
+    # for. It answers OPTIONS with 200 OK — which is how svmap decides a PBX is
+    # live and escalates to guessing — and challenges REGISTER with a digest
+    # nonce it records. When the client answers with an Authorization digest, the
+    # pieces a cracker needs are captured together as a hashcat-11400 line. Every
+    # credential ends in 403 Forbidden.
+    enabled: true
+    # 5060/udp is SIP's real port and is already unprivileged.
+    addr: "0.0.0.0:5060"
+    # The realm the client folds into its digest (part of what makes the capture
+    # crackable) and the PBX product the decoy names.
+    realm: "asterisk"
+    server: "Asterisk PBX 18.10.0"
+
+  http_proxy:
+    # An HTTP forward proxy — what an intruder scans for to borrow someone else's
+    # egress. It records where the client wanted to go (a CONNECT target or an
+    # absolute-form URL, which catches SSRF pivots and open-proxy checks) and
+    # answers 407 to capture cleartext Proxy-Authorization credentials. It never
+    # opens an outbound connection, so it is a sensor, not an actual relay.
+    enabled: true
+    # 3128 is Squid's default port and is already unprivileged.
+    addr: "0.0.0.0:3128"
+    server_header: "squid/5.7"
+    realm: "Squid proxy-caching web server"
 
   # LLMNR poisoning detection — the one module that is not a decoy, and the one
   # that sends traffic of its own.
@@ -399,12 +471,16 @@ services:
     interval: 5m
     splay: 1m
 
-  # Generic TCP catchers for ports that do not warrant a full emulator. They
+  # Generic TCP catchers for ports that do not warrant a full emulator yet. They
   # record the first bytes a client sends — enough to see a scan, but they
   # cannot capture credentials. Name each one after whatever it is pretending
-  # to be; that name appears in the alert.
+  # to be; that name appears in the alert. Where a real emulator exists (vnc,
+  # mysql, mssql, mongodb, …), prefer it — it captures credentials this cannot.
   banners:
     - enabled: true
-      name: vnc
-      addr: "0.0.0.0:5900"
-      banner: "RFB 003.008\n"
+      # RDP has no real emulator yet: X.224 alone catches the connection, but
+      # capturing a hash needs NLA/CredSSP. The catcher sends nothing (RDP has
+      # no greeting) and records the client's X.224 connection request.
+      name: rdp
+      addr: "0.0.0.0:3389"
+      banner: ""

@@ -70,6 +70,18 @@ about them will be closed with a pointer here:
   is welcome as a feature request, but it is not a vulnerability.
 - **The decoys reject every credential.** That is the design, not an
   authentication weakness.
+- **The HTTP proxy decoy never forwards a request.** It answers every request
+  with 407 and never opens an outbound connection, so it cannot be abused as an
+  open relay or SSRF hop — that it does not proxy is the point, not a defect.
+- **A credential-capturing decoy only captures what the client sends it.** The
+  database and SMB decoys steer a client onto the authentication path that hands
+  over a crackable — or, for MSSQL, cleartext — credential, but a client that
+  insists on a path the decoy cannot speak yields no credential: the MSSQL decoy
+  has no certificate, so a client that requires TLS or uses Windows/integrated
+  authentication is recorded only as an attempt; the MySQL decoy captures the
+  native-password response, not a `caching_sha2_password` secret carried over
+  TLS; SMB captures NTLMv2, not Kerberos. This is a property of not holding the
+  keys a real server would, not a weakness.
 - **The console warns loudly about a shared ingest token, missing TLS, or no
   retention policy.** Those warnings describe configuration choices; the
   defaults are documented and the warnings say what to do.

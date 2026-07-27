@@ -97,13 +97,18 @@ func TestDefaultsBindDistinctPorts(t *testing.T) {
 	check("mcp", s.MCP.Addr, s.MCP.Enabled)
 	check("git", s.Git.Addr, s.Git.Enabled)
 	check("mongodb", s.MongoDB.Addr, s.MongoDB.Enabled)
+	check("mysql", s.MySQL.Addr, s.MySQL.Enabled)
+	check("mssql", s.MSSQL.Addr, s.MSSQL.Enabled)
+	check("smb", s.SMB.Addr, s.SMB.Enabled)
+	check("vnc", s.VNC.Addr, s.VNC.Enabled)
+	check("http_proxy", s.HTTPProxy.Addr, s.HTTPProxy.Enabled)
 	for _, b := range s.Banners {
 		check("banner "+b.Name, b.Addr, b.Enabled)
 	}
 
 	// UDP is a separate space, so these only have to differ from each other.
 	udp := map[string]string{}
-	for name, addr := range map[string]string{"tftp": s.TFTP.Addr, "ntp": s.NTP.Addr} {
+	for name, addr := range map[string]string{"tftp": s.TFTP.Addr, "ntp": s.NTP.Addr, "sip": s.SIP.Addr} {
 		if other, clash := udp[addr]; clash {
 			t.Errorf("%s and %s both default to %s", other, name, addr)
 		}

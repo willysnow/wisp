@@ -37,13 +37,18 @@ import (
 	"github.com/willysnow/wisp/internal/service/llmnrsvc"
 	"github.com/willysnow/wisp/internal/service/mcpsvc"
 	"github.com/willysnow/wisp/internal/service/mongosvc"
+	"github.com/willysnow/wisp/internal/service/mssqlsvc"
+	"github.com/willysnow/wisp/internal/service/mysqlsvc"
 	"github.com/willysnow/wisp/internal/service/ntpsvc"
 	"github.com/willysnow/wisp/internal/service/ollamasvc"
+	"github.com/willysnow/wisp/internal/service/proxysvc"
 	"github.com/willysnow/wisp/internal/service/redissvc"
+	"github.com/willysnow/wisp/internal/service/sipsvc"
 	"github.com/willysnow/wisp/internal/service/smbsvc"
 	"github.com/willysnow/wisp/internal/service/sshsvc"
 	"github.com/willysnow/wisp/internal/service/telnetsvc"
 	"github.com/willysnow/wisp/internal/service/tftpsvc"
+	"github.com/willysnow/wisp/internal/service/vncsvc"
 	"github.com/willysnow/wisp/internal/sink"
 	"github.com/willysnow/wisp/internal/tlsutil"
 )
@@ -355,8 +360,23 @@ func buildServices(cfg *config.Config) ([]service.Service, error) {
 	if c := cfg.Services.MongoDB; c.Enabled {
 		out = append(out, mongosvc.New(c.Addr, c.Version))
 	}
+	if c := cfg.Services.MySQL; c.Enabled {
+		out = append(out, mysqlsvc.New(c.Addr, c.Version))
+	}
+	if c := cfg.Services.MSSQL; c.Enabled {
+		out = append(out, mssqlsvc.New(c.Addr, c.Version, c.ServerName))
+	}
 	if c := cfg.Services.SMB; c.Enabled {
 		out = append(out, smbsvc.New(c.Addr, c.ComputerName, c.DomainName))
+	}
+	if c := cfg.Services.VNC; c.Enabled {
+		out = append(out, vncsvc.New(c.Addr, c.Version))
+	}
+	if c := cfg.Services.SIP; c.Enabled {
+		out = append(out, sipsvc.New(c.Addr, c.Realm, c.Server))
+	}
+	if c := cfg.Services.HTTPProxy; c.Enabled {
+		out = append(out, proxysvc.New(c.Addr, c.ServerHeader, c.Realm))
 	}
 	if c := cfg.Services.LLMNR; c.Enabled {
 		interval, err := parseDuration("services.llmnr.interval", c.Interval)

@@ -68,7 +68,13 @@ services:
     #   - "8929:8929"    # gitlab
     #   - "9418:9418"    # git daemon
     #   - "27017:27017"  # mongodb
+    #   - "3306:3306"    # mysql
+    #   - "1433:1433"    # mssql
     #   - "445:4445"     # smb (445 is privileged; container maps it to 4445)
+    #   - "5900:5900"    # vnc
+    #   - "3128:3128"    # http proxy
+    #   - "3389:3389"    # rdp (banner catcher)
+    #   - "5060:5060/udp"  # sip
     #   - "8169:8169"    # cloud imds — see wisp.example.yaml before
     #                    # putting 169.254.169.254 in front of it
     #   - "6969:6969/udp"  # tftp

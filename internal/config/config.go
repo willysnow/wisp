@@ -223,7 +223,12 @@ type Services struct {
 	MCP           MCP           `yaml:"mcp"`
 	Git           Git           `yaml:"git"`
 	MongoDB       MongoDB       `yaml:"mongodb"`
+	MySQL         MySQL         `yaml:"mysql"`
+	MSSQL         MSSQL         `yaml:"mssql"`
 	SMB           SMB           `yaml:"smb"`
+	VNC           VNC           `yaml:"vnc"`
+	SIP           SIP           `yaml:"sip"`
+	HTTPProxy     HTTPProxy     `yaml:"http_proxy"`
 	LLMNR         LLMNR         `yaml:"llmnr"`
 	Banners       []Banner      `yaml:"banners"`
 }
@@ -278,6 +283,32 @@ type MongoDB struct {
 	Version string `yaml:"version"`
 }
 
+// MySQL emulates a server with authentication required, which is what makes a
+// client hand over a mysql_native_password response — a value that cracks
+// offline as hashcat mode 11200, the same shape of artifact the SMB and MongoDB
+// decoys capture.
+type MySQL struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	// Version is the server build reported in the handshake — the first thing a
+	// client and every fingerprinting tool reads. Empty falls back to a current
+	// server; the device persona can set it to match the rest of the disguise.
+	Version string `yaml:"version"`
+}
+
+// MSSQL emulates a Microsoft SQL Server through the TDS handshake. A LOGIN7
+// carries the password only lightly obfuscated, so unlike the other database
+// decoys this one recovers the cleartext password itself, not a hash to crack.
+type MSSQL struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	// Version is the build reported in the PRELOGIN response. ServerName is what
+	// the server calls itself in the login-error token — the @@SERVERNAME a
+	// client reads back. Both empty fall back to a plain current server.
+	Version    string `yaml:"version"`
+	ServerName string `yaml:"server_name"`
+}
+
 // SMB emulates a file server through the NTLM handshake, which is what makes a
 // client hand over a NetNTLMv2 hash — the native answer to the one thing
 // OpenCanary needs an external Samba install to do.
@@ -290,6 +321,45 @@ type SMB struct {
 	// on every other port.
 	ComputerName string `yaml:"computer_name"`
 	DomainName   string `yaml:"domain_name"`
+}
+
+// VNC emulates an RFB server that offers only VNC Authentication, which is what
+// makes a client return the DES challenge-response. Unlike a banner catcher on
+// 5900, this captures a credential that cracks offline (John the Ripper's `vnc`
+// format), not just the fact that someone connected.
+type VNC struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	// Version is the RFB protocol version offered first, e.g. "3.8". It decides
+	// which security handshake the exchange uses; empty falls back to 3.8.
+	Version string `yaml:"version"`
+}
+
+// SIP emulates a VoIP server on UDP that answers OPTIONS to look like a live PBX
+// and challenges REGISTER with a digest nonce, so a scanner returns an
+// Authorization digest that cracks offline (hashcat 11400). This is the protocol
+// sipvicious and friendly-scanner sweep for.
+type SIP struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	// Realm is what the client folds into its digest, so it is part of what makes
+	// the capture crackable; Server names the PBX product. Empty falls back to an
+	// Asterisk PBX.
+	Realm  string `yaml:"realm"`
+	Server string `yaml:"server"`
+}
+
+// HTTPProxy emulates an HTTP forward proxy. It records where a client wanted to
+// go — a CONNECT target or an absolute-form URL, which catches SSRF-through-proxy
+// and open-proxy abuse — and answers 407 to capture cleartext Proxy-Authorization
+// credentials. It never opens an outbound connection.
+type HTTPProxy struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	// ServerHeader is the proxy product the decoy claims to be; Realm titles its
+	// authentication challenge. Empty falls back to a Squid proxy.
+	ServerHeader string `yaml:"server_header"`
+	Realm        string `yaml:"realm"`
 }
 
 // LLMNR is a detector, not a decoy: it asks the network to resolve a hostname
@@ -586,6 +656,19 @@ func Default() *Config {
 				Addr:    "0.0.0.0:27017",
 				Version: "7.0.14",
 			},
+			MySQL: MySQL{
+				// 3306 is MySQL's real port and is already unprivileged.
+				Enabled: true,
+				Addr:    "0.0.0.0:3306",
+				Version: "8.0.36",
+			},
+			MSSQL: MSSQL{
+				// 1433 is SQL Server's real port and is already unprivileged.
+				Enabled:    true,
+				Addr:       "0.0.0.0:1433",
+				Version:    "16.0.1000",
+				ServerName: "SQLSERVER",
+			},
 			SMB: SMB{
 				// 445 is privileged, so wisp binds an unprivileged port and the
 				// operator redirects 445 to it — the same pattern as ssh on
@@ -594,6 +677,26 @@ func Default() *Config {
 				Addr:         "0.0.0.0:4445",
 				ComputerName: "FILESERVER",
 				DomainName:   "WORKGROUP",
+			},
+			VNC: VNC{
+				// 5900 is VNC's real port and is already unprivileged.
+				Enabled: true,
+				Addr:    "0.0.0.0:5900",
+				Version: "3.8",
+			},
+			SIP: SIP{
+				// 5060/udp is SIP's real port and is already unprivileged.
+				Enabled: true,
+				Addr:    "0.0.0.0:5060",
+				Realm:   "asterisk",
+				Server:  "Asterisk PBX 18.10.0",
+			},
+			HTTPProxy: HTTPProxy{
+				// 3128 is Squid's default port and is already unprivileged.
+				Enabled:      true,
+				Addr:         "0.0.0.0:3128",
+				ServerHeader: "squid/5.7",
+				Realm:        "Squid proxy-caching web server",
 			},
 			LLMNR: LLMNR{
 				// Off by default. It is the one module that sends traffic of
@@ -605,7 +708,10 @@ func Default() *Config {
 				Splay:    "1m",
 			},
 			Banners: []Banner{
-				{Enabled: true, Name: "vnc", Addr: "0.0.0.0:5900", Banner: "RFB 003.008\n"},
+				// A demonstration of the generic catcher on a port without a
+				// real emulator yet. RDP sends no greeting, so the banner is
+				// empty and the catcher just records the client's first bytes.
+				{Enabled: true, Name: "rdp", Addr: "0.0.0.0:3389", Banner: ""},
 			},
 		},
 	}
