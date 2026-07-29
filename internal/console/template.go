@@ -75,6 +75,7 @@ mark{background:none;color:var(--warm);font-weight:600}
   <h1>wisp <span>console</span></h1>
   <span class="stat"><b>{{.Total}}</b> events / last {{.Since}}</span>
   <span class="stat"><b>{{len .Sensors}}</b> sensors</span>
+  <a href="/tokens" class="nav">tokens &rarr;</a>
   <span class="who">signed in as <b>{{.User}}</b>
     <form class="inline" method="post" action="/logout">
       <input type="hidden" name="csrf_token" value="{{.CSRF}}">
@@ -233,5 +234,109 @@ background:var(--cool);color:#08121a;font:inherit;font-weight:600}
   <input id="p" name="password" type="password" autocomplete="current-password" required>
   <button type="submit">Sign in</button>
 </form>
+</body></html>
+`
+
+// tokensHTML lists the planted honeytokens and how often each has fired. Like
+// sensors and operators, tokens are minted from the CLI and only monitored
+// here — the console holds no form that mutates state, which keeps the whole UI
+// scriptless and behind the same login as everything else.
+const tokensHTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>tokens &middot; wisp console</title>
+<style>
+:root{--bg:#14161a;--panel:#1c1f26;--line:#2a2f39;--fg:#dfe3ea;--dim:#8b95a6;
+--hot:#ff6b6b;--warm:#ffb454;--cool:#5cc8ff;--ok:#5dd39e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+header{padding:16px 20px;border-bottom:1px solid var(--line);
+display:flex;flex-wrap:wrap;gap:16px;align-items:baseline}
+h1{font-size:15px;margin:0;letter-spacing:.5px}
+h1 span{color:var(--dim);font-weight:400}
+.stat{color:var(--dim)}
+.stat b{color:var(--fg);font-weight:600}
+main{padding:20px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);
+margin:0;padding:10px 14px;border-bottom:1px solid var(--line)}
+table{width:100%;border-collapse:collapse}
+td,th{padding:7px 10px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+th{font-size:11px;color:var(--dim);font-weight:500;text-transform:uppercase;letter-spacing:.5px}
+tr:last-child td{border-bottom:0}
+.wrap{overflow-x:auto}
+a{color:var(--cool);text-decoration:none}
+a:hover{text-decoration:underline}
+.id{color:var(--fg)}
+.kind{color:var(--cool);white-space:nowrap}
+.loc{color:var(--dim);word-break:break-all;max-width:360px}
+.memo{color:var(--fg)}
+.t{color:var(--dim);white-space:nowrap}
+.fired{color:var(--hot);font-weight:600;white-space:nowrap}
+.never{color:var(--dim)}
+.off{color:var(--dim)}
+.empty{padding:28px 14px;text-align:center;color:var(--dim)}
+.note{padding:10px 14px;color:var(--dim);border-bottom:1px solid var(--line)}
+.note code{color:var(--warm)}
+.who{margin-left:auto;color:var(--dim)}
+.who b{color:var(--fg);font-weight:600}
+form.inline{display:inline;margin-left:10px}
+button.link{background:none;border:0;padding:0;font:inherit;color:var(--cool);cursor:pointer}
+button.link:hover{text-decoration:underline}
+</style></head><body>
+
+<header>
+  <h1>wisp <span>console</span> &middot; tokens</h1>
+  <a href="/">&larr; events</a>
+  <span class="who">signed in as <b>{{.User}}</b>
+    <form class="inline" method="post" action="/logout">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button class="link" type="submit">sign out</button>
+    </form>
+  </span>
+</header>
+
+<main>
+  <section>
+    <h2>Honeytokens</h2>
+    <div class="note">
+      A token is a lure planted inside data &mdash; a document, a kubeconfig, an
+      MCP config &mdash; that calls home when opened or used. Mint one with
+      <code>wisp-console token add -kind &lt;kind&gt; -memo "where you put it"</code>.
+      {{if not .Configured}}<br>Set <code>tokens.base_url</code> in the console
+      config so a callback URL can be shown here.{{end}}
+    </div>
+    <div class="wrap">
+    <table>
+      <tr><th>Token</th><th>Kind</th><th>Memo</th><th>Locator</th><th>Triggered</th><th>Created</th><th>Status</th></tr>
+      {{range .Tokens}}
+      <tr>
+        <td class="id">{{.ID}}</td>
+        <td class="kind">{{.Kind}}</td>
+        <td class="memo">{{with .Memo}}{{.}}{{else}}<span class="never">&mdash;</span>{{end}}</td>
+        <td class="loc">{{with .Locator}}{{.}}{{else}}<span class="never">&mdash;</span>{{end}}</td>
+        <td>
+          {{if .Triggered}}
+            <span class="fired">{{.TriggerCount}}&times;</span>
+            <span class="t">last {{ago .LastTriggered}}</span>
+          {{else}}
+            <span class="never">never</span>
+          {{end}}
+        </td>
+        <td class="t">{{.CreatedAt.Format "2006-01-02"}}</td>
+        <td>{{if .Disabled}}<span class="off">disabled</span>{{else}}active{{end}}</td>
+      </tr>
+      {{else}}
+      <tr><td class="empty" colspan="7">
+        No tokens yet. Mint one with
+        <code>wisp-console token add -kind docx -memo "finance share"</code>,
+        plant it, and a firing shows up here and in the events timeline.
+      </td></tr>
+      {{end}}
+    </table>
+    </div>
+  </section>
+</main>
 </body></html>
 `

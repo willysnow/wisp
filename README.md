@@ -45,6 +45,7 @@ plus 9 decoys OpenCanary does not have.
 | Cloud / container / CI / LLM decoys | no | **yes** (`k8s`, `kubelet`, `docker`, `imds`, `elasticsearch`, `jenkins`, `gitlab`, `ollama`, `mcp`) |
 | Alerting | file, syslog, HPFeeds, email, webhook, + separate dedup daemon | JSONL, syslog, HPFeeds, email, LINE, webhook (Slack/Teams/Discord), **dedup built in** |
 | Fleet console | none | **included, self-hosted** |
+| Honeytokens | no — Canarytokens is a separate hosted service | **DNS, HTTP, Word doc, kubeconfig, MCP — self-hosted** |
 | Install | Python + Twisted + Scapy (+ Samba for SMB) | one static binary |
 | Platforms | Linux-first, root for several modules | anywhere Go cross-compiles |
 
@@ -799,6 +800,99 @@ a single port scan mutes your channel and the next real intrusion is missed.
 LINE is there because in Taiwan and Japan that is where operations teams
 actually are.
 
+## Tokens
+
+A decoy waits on the network for an intruder who is already inside to touch it.
+A **token** is the other half: a lure planted *inside data* — a document, a
+kubeconfig, an MCP server entry — that does nothing until someone opens or uses
+it, and then calls home from wherever the data ended up. The two cover different
+halves of the same problem, and since a callback is just an inbound request, the
+console is the natural place to receive it.
+
+This is the idea Thinkst's Canarytokens popularised. OpenCanary the honeypot has
+no token component — Canarytokens is a separate, hosted service — so this is not
+parity work but new surface. wisp's tokens are self-hosted, and a firing lands in
+the same console, timeline, search, export and notifications as every decoy
+capture: it is a `token_triggered` event like any other.
+
+Mint one from the console CLI:
+
+```bash
+wisp-console token add -kind docx -memo "finance share"
+```
+
+`-memo` is a note to yourself — where you planted it — and it rides on every
+alert the token raises, so "which lure fired" needs no lookup. `token list`
+shows every token and its firings; `token show <id>` re-prints an artifact;
+`token disable <id>` stops recording new hits while keeping the past ones in the
+timeline.
+
+Five kinds, by what each is planted as:
+
+| Kind | Planted as | Fires when |
+|---|---|---|
+| `http` | a URL | it is fetched — a bookmarked admin link, a wiki page, an `<img>` |
+| `dns` | a hostname | it is resolved — a config value, an allowlist, a host entry |
+| `docx` | a Word document | it is opened; Word fetches the document's linked image |
+| `kubeconfig` | a kubeconfig file | kubectl is first pointed at it |
+| `mcp` | an MCP client config | an agent loads it and connects |
+
+Everything but the bare DNS token rides an ordinary HTTP request to `/t/<id>` on
+the console, so they all need `tokens.base_url` set to an address the intruder's
+machine can actually reach — not a loopback or an internal-only name the planted
+data will never resolve. The console answers a callback with a 1×1 GIF, so a
+document's linked image resolves to a valid picture and shows nothing.
+
+**The `docx` token is the one that leaves the network the sensors watch.** It
+carries a *linked* — not embedded — image whose relationship is marked
+`TargetMode="External"`, and Word resolves that target over the network when it
+lays the page out. So the document can be carried off a share, mailed onward,
+dropped in someone's personal cloud drive, and it still calls home from wherever
+it is finally opened. Modern Office increasingly prompts before loading external
+content, so this is not a certainty — but it is the classic technique and still
+fires in many configurations.
+
+**The `dns` token is the one that fires where HTTP cannot leave.** Its lure is a
+hostname under a domain delegated to the console's own authoritative DNS server;
+resolving it — from anywhere, through any recursive resolver — walks the query
+out to the console, and the query itself is the callback. That is the same path
+data exfiltration takes, so a segment locked down enough to stop the HTTP tokens
+is usually still wide open to this one.
+
+```yaml
+tokens:
+  base_url: "https://console.example.com"   # where HTTP callbacks land
+  dns:
+    enabled: true
+    zone: "tokens.example.com"              # delegate this domain to the console
+    addr: ":53"
+    answer: "127.0.0.1"                      # a black hole; only has to satisfy the resolver
+```
+
+The DNS server is off by default: it is the one part of the console that wants a
+privileged port and a domain delegated to it — the zone's `NS` records must point
+at the console's host — so it runs only when both are set up. It is **not** an
+amplifier: it answers a single A record the size of the question and never
+recurses, and the address it hands back is a black hole whose only job is to let
+the lookup that carried the id complete. Serving it fails soft — if port 53 is
+already taken the console logs it and everything else keeps working, rather than
+refusing to start.
+
+Three honest limits:
+
+- **A token id is not a secret.** It travels inside the planted data, so anyone
+  who reads the lure can read the id; it is random only so it is unguessable and
+  unique. What it protects is the correlation — which lure, planted where, was
+  touched — not a credential. This is why the whole token record can be read back
+  in the UI and the CLI, unlike a sensor token of which only the hash is kept.
+- **A callback shows the resolver, not always the person.** A DNS token records
+  the recursive resolver that walked the query out — often the organisation's own
+  — not the end client, which DNS hides. An HTTP token records the fetching client
+  directly.
+- **Tokens catch use, not possession.** A lure that is copied but never opened is
+  silent, and that is correct: the signal is someone *acting* on stolen data,
+  which is the moment worth an alert.
+
 ## Rate limiting
 
 A honeypot writes a record every time a stranger touches it. An attacker who
@@ -912,7 +1006,7 @@ detectable tell.
 
 ```
 cmd/wispd/              sensor entry point, service wiring, signal handling
-cmd/wisp-console/       console server, sensor/user CLI, healthcheck
+cmd/wisp-console/       console server, sensor/user/token CLI, healthcheck
 internal/config/        sensor YAML config with defaults-first loading
 internal/event/         the one event type every service emits
 internal/ntlm/          NTLMSSP challenge + NetNTLMv2 capture, shared by smb + rdp
@@ -922,6 +1016,8 @@ internal/sink/          console + JSONL output with rotation, remote delivery,
 internal/portscan/      scan detection: fan-out correlation everywhere, plus a
                         Linux AF_PACKET sniffer for stealth scans (build-tagged)
 internal/tlsutil/       decoy certificates, and how a sensor trusts a console
+internal/token/         honeytoken artifacts: URL, DNS name, Word doc, kubeconfig,
+                        MCP config — rendered from a token id and the console's address
 internal/service/       the Service interface
   httpdecoy/            the machinery the HTTP-shaped decoys share
   servicetest/          the harness every emulator is tested with
@@ -945,8 +1041,9 @@ internal/service/       the Service interface
   elasticsvc/           open Elasticsearch and the queries run against it
   jenkinssvc/           Jenkins, including the Groovy script console
   gitlabsvc/            GitLab, and stolen glpat- access tokens
-internal/console/       UI, auth, retention, TLS termination
-  store/                SQLite: events, sensors, operators, sessions
+internal/console/       UI, auth, retention, TLS termination, token callbacks
+                        (HTTP + an authoritative DNS server for DNS tokens)
+  store/                SQLite: events, sensors, operators, sessions, tokens
   notify/               email, LINE, webhooks, and alert dedup
 ```
 
@@ -1083,11 +1180,13 @@ as anything other than a demo.
       service inventing its own
 - [ ] TCP/IP stack fingerprint shaping (defeating `nmap -O` needs nfqueue or
       eBPF; user-space Go cannot change TTL or window size)
-- [ ] **Token service** — DNS/HTTP callback, Word docs, kubeconfig, MCP configs.
+- [x] **Token service** — DNS/HTTP callback, Word docs, kubeconfig, MCP configs.
       Decoys only see an intruder who is already on your network; a token
       travels with the data and fires wherever it ends up. The two cover
-      different halves of the problem and the console is the natural place to
-      receive callbacks.
+      different halves of the problem, and the console is where callbacks land —
+      a firing is a `token_triggered` event in the same timeline, search, export
+      and notifications as every decoy capture. Mint them with
+      `wisp-console token add`; see [Tokens](#tokens).
 
 **Getting it deployable**
 

@@ -2,6 +2,7 @@ package console
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/willysnow/wisp/internal/console/notify"
 	"github.com/willysnow/wisp/internal/syslog"
+	"github.com/willysnow/wisp/internal/token"
 )
 
 // Config is the console's YAML configuration. Everything is optional: with no
@@ -21,6 +23,42 @@ type Config struct {
 	Sensors   SensorsConfig   `yaml:"sensors"`
 	Retention RetentionConfig `yaml:"retention"`
 	Notify    NotifyConfig    `yaml:"notify"`
+	Tokens    TokensConfig    `yaml:"tokens"`
+}
+
+// TokensConfig covers honeytokens: lures planted in data that call home when
+// opened or used. The console mints them, plants nothing itself, and receives
+// their callbacks — over HTTP for every kind, and over DNS for the one that has
+// to reach a network HTTP cannot leave.
+type TokensConfig struct {
+	// BaseURL is this console's public origin, e.g. https://console.example.com.
+	// It is where HTTP token callbacks land, so it must be the address an
+	// intruder's machine can reach — not a loopback or an internal-only name the
+	// planted data will never resolve.
+	BaseURL string `yaml:"base_url"`
+
+	// DNS configures the authoritative server for DNS tokens.
+	DNS TokenDNSConfig `yaml:"dns"`
+}
+
+// TokenDNSConfig configures the DNS token server. It is off by default: it is
+// the one part of the console that wants a privileged port and a domain
+// delegated to it, so it runs only when both are set up.
+type TokenDNSConfig struct {
+	Enabled bool `yaml:"enabled"`
+
+	// Zone is the domain delegated to this server, e.g. tokens.example.com. A
+	// DNS token is <id>.<zone>, so the zone's NS records must point at this host.
+	Zone string `yaml:"zone"`
+
+	// Addr is the listen address. Empty means :53, which needs privilege or a
+	// redirect — see the deployment notes.
+	Addr string `yaml:"addr"`
+
+	// Answer is the A record handed back for names under the zone. Empty means
+	// 127.0.0.1, a black hole: the answer only has to satisfy the resolver that
+	// carried the id, not lead anywhere.
+	Answer string `yaml:"answer"`
 }
 
 // SensorsConfig covers what the console watches for on the sensors' behalf.
@@ -230,6 +268,46 @@ func (c *Config) ServerOptions() (Options, error) {
 	opts.SilenceAfter = silence.After
 
 	return opts, nil
+}
+
+// TokenArtifactConfig is what the artifacts and the UI need: where the console
+// can be reached. It is not validated here — an empty base URL is a legitimate
+// state (no HTTP tokens minted yet), and the error is raised where a token that
+// needs it is actually rendered.
+func (c *Config) TokenArtifactConfig() token.Config {
+	return token.Config{
+		BaseURL: strings.TrimSpace(c.Tokens.BaseURL),
+		DNSZone: strings.TrimSpace(c.Tokens.DNS.Zone),
+	}
+}
+
+// TokenDNS parses the DNS token server configuration.
+func (c *Config) TokenDNS() (DNSConfig, error) {
+	d := c.Tokens.DNS
+	out := DNSConfig{
+		Enabled: d.Enabled,
+		Zone:    strings.Trim(strings.TrimSpace(d.Zone), "."),
+		Addr:    strings.TrimSpace(d.Addr),
+	}
+
+	if d.Enabled && out.Zone == "" {
+		return out, fmt.Errorf("tokens.dns.zone is required when tokens.dns.enabled is true")
+	}
+
+	if a := strings.TrimSpace(d.Answer); a != "" {
+		ip := net.ParseIP(a)
+		if ip == nil {
+			return out, fmt.Errorf("tokens.dns.answer is not an IP address: %q", a)
+		}
+		if ip.To4() == nil {
+			// Only A records are served, so the answer has to be IPv4. An
+			// operator who set a v6 address here would get silent empty answers.
+			return out, fmt.Errorf("tokens.dns.answer must be an IPv4 address, got %q", a)
+		}
+		out.Answer = ip
+	}
+
+	return out, nil
 }
 
 // SilencePolicy parses the sensor-watching section.
