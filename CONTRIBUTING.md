@@ -1,9 +1,10 @@
 # Contributing
 
-The most useful contribution right now is a protocol module: wisp covers 8 of
-OpenCanary's 21, and the gap is what stops it being usable as anything other
-than a demo. See the roadmap in the README for what is missing and roughly how
-hard each one is.
+Protocol coverage is complete — wisp reimplements all 21 of OpenCanary's modules
+and adds nine decoys and a honeytoken service of its own. The most useful
+contributions now are the ones that make it battle-tested: real-world hardening,
+a new decoy for the 2026 attack surface, or better fidelity in an existing
+capture.
 
 Security problems go to [SECURITY.md](SECURITY.md), never to a public issue.
 
@@ -48,7 +49,7 @@ checklist:
 4. **`wisp.example.yaml`**: the new section, with comments explaining the
    choices an operator has to make.
 5. **README**: a row in the "What it emulates today" table saying what it
-   *captures*, and a tick on the roadmap.
+   *captures*.
 6. **Tests** for whatever the module must never do.
 
 Three things decide whether a module is any good:
@@ -115,8 +116,36 @@ not ceremony: an untyped constant larger than a 32-bit `int` once stopped the
 whole sensor from building for `linux/arm`, and nothing else would have caught
 it.
 
+Almost every test binds a loopback listener. On a Windows machine running
+endpoint security software, the first connection to a freshly built test binary
+can stall for the ten-second header timeout and then fail with `EOF` — a
+different test each run, usually a TLS one. That is the scanner touching each new
+binary's first socket, not a race in the code; `go test ./... -p 1` makes it
+rarer, and re-running clears it. The suite is green on all three platforms in CI.
+
 Commits: imperative subject line, and a body explaining why when the change is
 not obvious. Small, reviewable pull requests over large ones.
+
+## Releasing
+
+Tagging is the whole procedure — the release workflow does the rest:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+That re-runs the tests (a tag can be pushed at a commit CI never saw), builds
+both binaries for seven platforms, publishes a GitHub release with checksums and
+a build-provenance attestation, and pushes multi-architecture container images to
+`ghcr.io`. A tag with a hyphen (`v0.1.0-rc1`) is marked as a pre-release.
+
+Every binary is stamped: `wispd -version` reports the release, the commit, and
+the Go version; a build from a working tree says `dev`. To verify a download:
+
+```bash
+sha256sum -c SHA256SUMS --ignore-missing
+gh attestation verify wisp_v0.1.0_linux_amd64.tar.gz --repo willysnow/wisp
+```
 
 ## Licence and provenance
 
