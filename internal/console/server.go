@@ -24,6 +24,7 @@ import (
 	"github.com/willysnow/wisp/internal/console/notify"
 	"github.com/willysnow/wisp/internal/console/store"
 	"github.com/willysnow/wisp/internal/event"
+	"github.com/willysnow/wisp/internal/token"
 )
 
 // maxBatch bounds one delivery. Sensors batch events; a single request should
@@ -45,6 +46,11 @@ type Server struct {
 	// silenceAfter is the threshold the UI uses to mark a sensor as quiet. It
 	// mirrors the watcher's policy so the page and the alerts agree.
 	silenceAfter time.Duration
+
+	// tokenCfg tells the UI where the console can be reached, so it can show the
+	// URL or hostname to plant for each token. The callback endpoint itself does
+	// not need it — a firing token carries its own id.
+	tokenCfg token.Config
 }
 
 // Options configures the server. The zero value is usable: it means no
@@ -72,6 +78,11 @@ type Options struct {
 	// SilenceAfter is how long a sensor may be quiet before the UI marks it.
 	// Zero leaves sensors unmarked, matching a console with no silence policy.
 	SilenceAfter time.Duration
+
+	// TokenConfig is where this console can be reached, used to render the
+	// locator to plant for each token. The zero value is fine — the tokens page
+	// then explains that tokens.base_url has to be set before it can show one.
+	TokenConfig token.Config
 }
 
 // New builds the server.
@@ -91,6 +102,7 @@ func New(st *store.Store, opts Options) (*Server, error) {
 	for _, page := range []struct{ name, body string }{
 		{"index", indexHTML},
 		{"login", loginHTML},
+		{"tokens", tokensHTML},
 	} {
 		if _, err := tmpl.New(page.name).Parse(page.body); err != nil {
 			return nil, err
@@ -114,6 +126,7 @@ func New(st *store.Store, opts Options) (*Server, error) {
 		trustProxy:   opts.TrustProxy,
 		limiter:      newLoginLimiter(),
 		silenceAfter: opts.SilenceAfter,
+		tokenCfg:     opts.TokenConfig,
 	}, nil
 }
 
@@ -127,8 +140,14 @@ func (s *Server) Handler() http.Handler {
 		_, _ = w.Write([]byte("ok"))
 	})
 
+	// Token callbacks are public by construction: an intruder trips them, and an
+	// intruder has no session. Everything they carry is treated as untrusted and
+	// only recorded, never acted on.
+	mux.HandleFunc("/t/", s.handleTokenTrigger)
+
 	mux.HandleFunc("/login", s.handleLogin)
 	mux.HandleFunc("/logout", s.handleLogout)
+	mux.HandleFunc("/tokens", s.requireLogin(s.handleTokens))
 	mux.HandleFunc("/export.csv", s.requireLogin(s.handleExport))
 	mux.HandleFunc("/export.json", s.requireLogin(s.handleExport))
 	mux.HandleFunc("/", s.requireLogin(s.handleIndex))

@@ -23,6 +23,7 @@ import (
 	"github.com/willysnow/wisp/internal/console"
 	"github.com/willysnow/wisp/internal/console/notify"
 	"github.com/willysnow/wisp/internal/console/store"
+	"github.com/willysnow/wisp/internal/token"
 )
 
 func main() {
@@ -34,6 +35,8 @@ func main() {
 			os.Exit(runSensorCommand(os.Args[2:]))
 		case "user":
 			os.Exit(runUserCommand(os.Args[2:]))
+		case "token":
+			os.Exit(runTokenCommand(os.Args[2:]))
 		case "healthcheck":
 			os.Exit(runHealthcheck(os.Args[2:]))
 		}
@@ -105,6 +108,11 @@ func main() {
 	if err != nil {
 		logger.Fatalf("config: %v", err)
 	}
+	tokenArtifact := cfg.TokenArtifactConfig()
+	dnsCfg, err := cfg.TokenDNS()
+	if err != nil {
+		logger.Fatalf("config: %v", err)
+	}
 
 	// The UI is never open. If nobody has been enrolled, one account is created
 	// here and its password printed once — the same bargain as the sensor
@@ -119,6 +127,7 @@ func main() {
 
 	opts.IngestToken = ingestToken
 	opts.Dispatch = dispatch
+	opts.TokenConfig = tokenArtifact
 
 	srv, err := console.New(st, opts)
 	if err != nil {
@@ -171,6 +180,18 @@ func main() {
 	// the absence of something.
 	go console.NewSilenceWatcher(st, silence, dispatch, logger).Run(ctx)
 
+	// The authoritative DNS server for DNS tokens, when one is configured. Its
+	// failure is logged, not fatal: the HTTP tokens and the whole console keep
+	// working without it, and a console that refused to start because port 53
+	// was taken would be worse than one that says so and carries on.
+	if dnsCfg.Active() {
+		go func() {
+			if err := console.NewDNSServer(dnsCfg, st, dispatch, logger).Run(ctx); err != nil && ctx.Err() == nil {
+				logger.Printf("dns token server: %v — DNS tokens will not fire", err)
+			}
+		}()
+	}
+
 	scheme := "http"
 	if tlsSetup.Enabled() {
 		scheme = "https"
@@ -205,6 +226,8 @@ func main() {
 		logger.Printf("NOTE: no sensor silence threshold set. A sensor that is found and")
 		logger.Printf("      stopped looks exactly like a quiet network. Set sensors.silence_after in %s.", *cfgPath)
 	}
+
+	logTokens(logger, tokenArtifact, dnsCfg, *cfgPath)
 
 	switch {
 	case retention.MaxAge > 0 && retention.MaxEvents > 0:
@@ -272,6 +295,32 @@ func logTLS(logger *log.Logger, t *console.TLS, cfgPath string) {
 
 	case console.TLSACME:
 		logger.Printf("TLS: certificates issued automatically (ACME)")
+	}
+}
+
+// logTokens reports what the token service can do at startup: where HTTP
+// callbacks land, and whether the DNS half is answering. A console with no
+// tokens.base_url can still receive a callback — the endpoint is always live —
+// but it cannot show an operator the URL to plant, so that is worth saying.
+func logTokens(logger *log.Logger, artifact token.Config, dnsCfg console.DNSConfig, cfgPath string) {
+	switch {
+	case artifact.BaseURL == "":
+		logger.Printf("NOTE: no tokens.base_url set. The /t/ callback endpoint is live, but set")
+		logger.Printf("      tokens.base_url in %s to mint HTTP, document, kubeconfig and MCP tokens.", cfgPath)
+	default:
+		if _, err := token.HTTPURL(artifact, "probe"); err != nil {
+			logger.Printf("WARNING: tokens.base_url is unusable: %v", err)
+		} else {
+			logger.Printf("token callbacks land at %s/t/", strings.TrimRight(artifact.BaseURL, "/"))
+		}
+	}
+
+	if dnsCfg.Active() {
+		addr := dnsCfg.Addr
+		if addr == "" {
+			addr = ":53"
+		}
+		logger.Printf("answering DNS token callbacks for *.%s on %s", dnsCfg.Zone, addr)
 	}
 }
 

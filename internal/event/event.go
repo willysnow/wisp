@@ -65,6 +65,13 @@ var HighValueKinds = []string{
 	// usually the last thing that happens before lateral movement.
 	"credential_request",
 
+	// A honeytoken fired. A token is a lure planted inside data — a document, a
+	// kubeconfig, an MCP server entry — that does nothing until someone opens or
+	// uses it, at which point it calls home. Unlike every other event here it can
+	// fire from anywhere the data travelled, not only from a segment a sensor
+	// watches, and nothing legitimate has a reason to touch a planted lure at all.
+	"token_triggered",
+
 	// An attacker already at work on the segment. Nothing legitimate answers a
 	// name that does not exist, so an LLMNR reply is not a sign of an intrusion
 	// to come — it is one in progress.

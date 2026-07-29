@@ -178,3 +178,44 @@ notify:
       name: siem
       url: "https://siem.internal.example.com/ingest/wisp"
       format: json
+
+# Honeytokens: lures planted inside data — a document, a kubeconfig, an MCP
+# server entry — that call home when opened or used. A decoy waits on the
+# network for an intruder who is already inside; a token travels with the data
+# and fires from wherever it ends up. Mint them from the CLI:
+#
+#   wisp-console token add -kind docx -memo "finance share"
+#   wisp-console token list
+#
+# A firing is a token_triggered event in the same timeline, search, export and
+# notifications as every decoy capture.
+tokens:
+  # This console's public origin, where HTTP token callbacks land. Every kind
+  # but the bare DNS token rides an HTTP request to <base_url>/t/<id>, so this
+  # has to be an address the intruder's machine can actually reach — not a
+  # loopback or an internal-only name the planted data will never resolve. The
+  # /t/ endpoint is always live; without this set, the CLI and the tokens page
+  # just cannot show you the URL to plant.
+  base_url: "https://console.example.com"
+
+  # The authoritative DNS server for DNS tokens. Off by default: it is the one
+  # part of the console that wants a privileged port and a domain delegated to
+  # it. A DNS token reaches the console even from a segment that blocks outbound
+  # HTTP, because a recursive resolver walks the query out for it.
+  dns:
+    enabled: false
+
+    # The domain delegated to this server. A DNS token is <id>.<zone>, so this
+    # zone's NS records must point at this host for a lookup to arrive here.
+    zone: "tokens.example.com"
+
+    # Listen address. :53 needs privilege or a redirect — see the deployment
+    # notes. If the port is already taken the console logs it and carries on;
+    # the DNS tokens simply will not fire.
+    addr: ":53"
+
+    # The A record handed back for names under the zone. A black hole: the
+    # answer only has to satisfy the resolver that carried the id, not lead
+    # anywhere. It never recurses and answers one record the size of the
+    # question, so it is not a UDP amplifier.
+    answer: "127.0.0.1"

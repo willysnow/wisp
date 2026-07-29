@@ -83,6 +83,27 @@ CREATE TABLE IF NOT EXISTS console_sessions (
 
 CREATE INDEX IF NOT EXISTS idx_sessions_user    ON console_sessions(username);
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON console_sessions(expires_at);
+
+-- Honeytokens: lures planted inside data — a document, a kubeconfig, an MCP
+-- server entry — that do nothing until someone opens or uses them, at which
+-- point they call home to this console. This row is the token's definition and
+-- a running tally; every firing is also written to events, so a trigger appears
+-- in the timeline, search, export and notifications like any other capture.
+--
+-- The id is not a secret: it travels inside the planted data and is what the
+-- callback carries. It is random only so it is unguessable and unique, which is
+-- why the whole row can be read back (unlike a sensor token, of which only the
+-- hash is kept).
+CREATE TABLE IF NOT EXISTS tokens (
+	id             TEXT PRIMARY KEY,
+	kind           TEXT NOT NULL,
+	memo           TEXT NOT NULL,
+	created_at     TEXT NOT NULL,
+	created_by     TEXT NOT NULL DEFAULT '',
+	trigger_count  INTEGER NOT NULL DEFAULT 0,
+	last_triggered TEXT,
+	disabled_at    TEXT
+);
 `
 
 // TokenPrefix marks a string as a wisp sensor token. It exists so the token is

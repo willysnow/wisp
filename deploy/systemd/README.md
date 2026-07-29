@@ -91,6 +91,31 @@ sudo -u wisp-console wisp-console sensor add sensor-01 -db /var/lib/wisp-console
 To serve TLS on 443 directly — which ACME needs — uncomment the two
 `CAP_NET_BIND_SERVICE` lines in the unit. Everything else stays as it is.
 
+### DNS tokens
+
+The DNS token server (`tokens.dns` in the config) is off unless you enable it,
+and when on it wants port 53. That is privileged, so either grant the bind
+capability — the same two `CAP_NET_BIND_SERVICE` lines as above cover both 443
+and 53 — or listen high and redirect:
+
+```yaml
+tokens:
+  dns:
+    enabled: true
+    zone: tokens.example.com
+    addr: ":5353"
+```
+
+```bash
+sudo nft add rule inet nat prerouting udp dport 53 redirect to :5353
+sudo nft add rule inet nat prerouting tcp dport 53 redirect to :5353
+```
+
+Either way the zone's `NS` records must delegate `tokens.example.com` to this
+host, or a lookup never arrives. The server only reads and answers a single A
+record the size of the query, so it is not an amplifier — but it is the one part
+of the console that puts it on the public DNS, so it stays opt-in.
+
 ## Checking the sandbox
 
 ```bash

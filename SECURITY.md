@@ -78,6 +78,18 @@ about them will be closed with a pointer here:
   protocol, and an agent that replied could be reflected at a spoofed victim; the
   community is in the request, so silence loses no capture. "It does not respond
   to snmpget" is the design.
+- **The DNS token server is authoritative-only.** When enabled it answers for the
+  one delegated zone and refuses everything else — it never recurses, so it is not
+  an open resolver, and it returns a single A record the size of the query, so it
+  is not an amplifier. It puts the console on the public DNS, which is why it is
+  off by default and opt-in; that it exists is the design, the same way the SNMP
+  decoy's silence is.
+- **The token callback endpoint is unauthenticated by design.** `/t/<id>` has to
+  be public — an intruder trips it, and an intruder has no session. It records the
+  hit and returns only a 1×1 GIF for a live id or a 404 for anything else; it never
+  returns captured data, and the id space is 120 bits of randomness, so the 404 is
+  not a useful oracle. A planted token id is not a secret in the first place: it
+  travels inside the data it was planted in.
 - **The portscan packet sniffer only reads.** Its Linux AF_PACKET socket captures
   packets to classify stealth scans; it never sends one. It needs `CAP_NET_RAW`,
   and where that is absent — or off Linux — it logs that it is unavailable and the
