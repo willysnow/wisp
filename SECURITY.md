@@ -73,6 +73,11 @@ about them will be closed with a pointer here:
 - **The HTTP proxy decoy never forwards a request.** It answers every request
   with 407 and never opens an outbound connection, so it cannot be abused as an
   open relay or SSRF hop — that it does not proxy is the point, not a defect.
+- **The SNMP decoy never answers.** It parses each request, records the community
+  string and OIDs, and sends nothing back. SNMP is a top UDP amplification
+  protocol, and an agent that replied could be reflected at a spoofed victim; the
+  community is in the request, so silence loses no capture. "It does not respond
+  to snmpget" is the design.
 - **A credential-capturing decoy only captures what the client sends it.** The
   database and SMB decoys steer a client onto the authentication path that hands
   over a crackable — or, for MSSQL, cleartext — credential, but a client that

@@ -9,7 +9,7 @@ the query, the container spec, or the paths the intruder tried.
 > "Canarytokens" are Thinkst trademarks, and this project is an independent
 > reimplementation rather than a fork or a successor.
 
-> **Status: early.** `wisp` covers 18 of OpenCanary's 21 protocol modules and
+> **Status: early.** `wisp` covers 19 of OpenCanary's 21 protocol modules and
 > is not yet a replacement for it — see [Honest comparison](#honest-comparison)
 > before you deploy it.
 
@@ -33,14 +33,14 @@ at all.
 
 ## Honest comparison
 
-OpenCanary ships 21 protocol modules. `wisp` has reimplemented **18** of them,
+OpenCanary ships 21 protocol modules. `wisp` has reimplemented **19** of them,
 plus 9 decoys OpenCanary does not have.
 
 | | OpenCanary | wisp today |
 |---|---|---|
-| Protocol modules | 21 | **18** + 9 new decoys |
-| Implemented here | — | `ssh`, `http`, `https`, `telnet`, `ftp`, `redis`, `tftp`, `ntp`, `git`, `mongodb`, `mysql`, `mssql`, `smb`, `vnc`, `sip`, HTTP proxy, `llmnr`, TCP banner |
-| Still missing | — | RDP, SNMP, portscan |
+| Protocol modules | 21 | **19** + 9 new decoys |
+| Implemented here | — | `ssh`, `http`, `https`, `telnet`, `ftp`, `redis`, `tftp`, `ntp`, `git`, `mongodb`, `mysql`, `mssql`, `smb`, `vnc`, `sip`, HTTP proxy, `snmp`, `llmnr`, TCP banner |
+| Still missing | — | RDP, portscan |
 | SMB | yes, via external Samba | **native** — no Samba, captures NetNTLMv2 |
 | Cloud / container / CI / LLM decoys | no | **yes** (`k8s`, `kubelet`, `docker`, `imds`, `elasticsearch`, `jenkins`, `gitlab`, `ollama`, `mcp`) |
 | Alerting | file, syslog, HPFeeds, email, webhook, + separate dedup daemon | JSONL, syslog, HPFeeds, email, LINE, webhook (Slack/Teams/Discord), **dedup built in** |
@@ -78,6 +78,7 @@ deploying a honeypot at all.
 | `vnc` | 5900/tcp | the **VNC-auth challenge-response** — cracks offline, John the Ripper `vnc` |
 | `sip` | 5060/udp | the **REGISTER digest** — cracks offline (hashcat 11400), plus scanner recon |
 | `http-proxy` | 3128/tcp | the **tunnel target** (SSRF/open-proxy intent) and cleartext proxy creds |
+| `snmp` | 161/udp | the **community string** (v1/v2c credential) and OIDs — never answers, so no amplification |
 | `llmnr` | outbound | **an active poisoner on the segment**, and the address it claims |
 | banner | any | first bytes sent, for ports without a real emulator |
 | `ollama` | 11434/tcp | **model-list recon, and the actual prompts sent to your "GPU"** |
@@ -303,6 +304,20 @@ because a sensor that made outbound requests on an intruder's behalf would be an
 actual relay. The 407 also does what a closed proxy does: it invites credentials,
 and a `Proxy-Authorization: Basic` header is base64, not a hash, so what comes out
 is the cleartext proxy password, logged as `login_password`.
+
+**`snmp` captures the community string and deliberately never answers.** In SNMP
+v1 and v2c the community string is the credential — sent in the clear on every
+request — so `onesixtyone` and `snmpwalk` spray it: `public`, `private`, the
+vendor defaults. The decoy decodes each request with a small hand-written
+BER/ASN.1 reader (the one dependency the other decoys did not already imply) and
+records the community, the operation and the OIDs; a `SetRequest` is an attempt
+to reconfigure the device, stated in the OIDs it would change. What it does *not*
+do is reply. SNMP is the internet's favourite UDP amplification protocol — a
+`GETBULK` response can dwarf its request — so an agent that answered could be
+turned into a reflector aimed at a spoofed victim. The community arrives in the
+request, so capturing it needs no reply; the decoy listens, records, and stays
+silent, which is also what a firewalled agent looks like. `SECURITY.md` lists the
+silence as a deliberate property, not a defect.
 
 **`imds` listens on an ordinary port by default (`8169`), not on
 169.254.169.254.** That address has to exist on the host before anything can
@@ -858,6 +873,7 @@ internal/service/       the Service interface
   vncsvc/               RFB handshake and VNC-auth challenge-response capture
   sipsvc/               SIP over UDP, REGISTER digest capture (hashcat 11400)
   proxysvc/             HTTP forward proxy: tunnel target and cleartext creds
+  snmpsvc/              SNMP over UDP, community-string capture (hand-rolled BER)
   llmnrsvc/             LLMNR poisoning detection (not a decoy)
   ollamasvc/            fake Ollama inference server
   k8ssvc/               Kubernetes apiserver, and the tokens aimed at it
@@ -965,7 +981,9 @@ as anything other than a demo.
 - [x] SIP and HTTP proxy — SIP answers OPTIONS to look like a live PBX and
       captures the REGISTER digest (hashcat 11400); the HTTP proxy records the
       CONNECT/absolute-form target and captures cleartext proxy credentials
-- [ ] Medium protocols, remainder: SNMP
+- [x] SNMP — a hand-rolled BER/ASN.1 decoder captures the v1/v2c community
+      string (the credential) and the OIDs, and the v3 username; it never
+      answers, so it cannot be used as a UDP amplifier
 - [ ] Port-scan detection (OpenCanary drives iptables; a cross-platform version
       needs pcap instead)
 - [ ] RDP — X.224 alone catches the connection; NLA is needed for credentials
@@ -1012,7 +1030,7 @@ as anything other than a demo.
 
 ## Contributing
 
-The most useful contribution is a protocol module — the gap between 18 and 21 is
+The most useful contribution is a protocol module — the gap between 19 and 21 is
 what stops this being usable as anything other than a demo. The checklist, and
 the constraints every change has to respect, are in
 [CONTRIBUTING.md](CONTRIBUTING.md).

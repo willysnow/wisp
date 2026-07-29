@@ -229,6 +229,7 @@ type Services struct {
 	VNC           VNC           `yaml:"vnc"`
 	SIP           SIP           `yaml:"sip"`
 	HTTPProxy     HTTPProxy     `yaml:"http_proxy"`
+	SNMP          SNMP          `yaml:"snmp"`
 	LLMNR         LLMNR         `yaml:"llmnr"`
 	Banners       []Banner      `yaml:"banners"`
 }
@@ -360,6 +361,16 @@ type HTTPProxy struct {
 	// authentication challenge. Empty falls back to a Squid proxy.
 	ServerHeader string `yaml:"server_header"`
 	Realm        string `yaml:"realm"`
+}
+
+// SNMP emulates an agent on UDP whose v1/v2c community string is the credential,
+// sent in the clear on every request. The decoy records every community tried
+// (the onesixtyone spray) and never answers — SNMP is the internet's favourite
+// amplification protocol, and an agent that replied could be turned into a
+// reflector.
+type SNMP struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
 }
 
 // LLMNR is a detector, not a decoy: it asks the network to resolve a hostname
@@ -697,6 +708,13 @@ func Default() *Config {
 				Addr:         "0.0.0.0:3128",
 				ServerHeader: "squid/5.7",
 				Realm:        "Squid proxy-caching web server",
+			},
+			SNMP: SNMP{
+				// 161/udp is privileged, so wisp binds an unprivileged port by
+				// default and the operator redirects 161 to it — the same pattern
+				// as ntp on 1123. See wisp.example.yaml.
+				Enabled: true,
+				Addr:    "0.0.0.0:1161",
 			},
 			LLMNR: LLMNR{
 				// Off by default. It is the one module that sends traffic of

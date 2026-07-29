@@ -75,6 +75,7 @@ services:
     #   - "3128:3128"    # http proxy
     #   - "3389:3389"    # rdp (banner catcher)
     #   - "5060:5060/udp"  # sip
+    #   - "161:1161/udp"   # snmp (161 is privileged; container maps it to 1161)
     #   - "8169:8169"    # cloud imds — see wisp.example.yaml before
     #                    # putting 169.254.169.254 in front of it
     #   - "6969:6969/udp"  # tftp

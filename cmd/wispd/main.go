@@ -45,6 +45,7 @@ import (
 	"github.com/willysnow/wisp/internal/service/redissvc"
 	"github.com/willysnow/wisp/internal/service/sipsvc"
 	"github.com/willysnow/wisp/internal/service/smbsvc"
+	"github.com/willysnow/wisp/internal/service/snmpsvc"
 	"github.com/willysnow/wisp/internal/service/sshsvc"
 	"github.com/willysnow/wisp/internal/service/telnetsvc"
 	"github.com/willysnow/wisp/internal/service/tftpsvc"
@@ -377,6 +378,9 @@ func buildServices(cfg *config.Config) ([]service.Service, error) {
 	}
 	if c := cfg.Services.HTTPProxy; c.Enabled {
 		out = append(out, proxysvc.New(c.Addr, c.ServerHeader, c.Realm))
+	}
+	if c := cfg.Services.SNMP; c.Enabled {
+		out = append(out, snmpsvc.New(c.Addr))
 	}
 	if c := cfg.Services.LLMNR; c.Enabled {
 		interval, err := parseDuration("services.llmnr.interval", c.Interval)

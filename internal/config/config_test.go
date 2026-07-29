@@ -108,7 +108,7 @@ func TestDefaultsBindDistinctPorts(t *testing.T) {
 
 	// UDP is a separate space, so these only have to differ from each other.
 	udp := map[string]string{}
-	for name, addr := range map[string]string{"tftp": s.TFTP.Addr, "ntp": s.NTP.Addr, "sip": s.SIP.Addr} {
+	for name, addr := range map[string]string{"tftp": s.TFTP.Addr, "ntp": s.NTP.Addr, "sip": s.SIP.Addr, "snmp": s.SNMP.Addr} {
 		if other, clash := udp[addr]; clash {
 			t.Errorf("%s and %s both default to %s", other, name, addr)
 		}

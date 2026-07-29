@@ -446,6 +446,22 @@ services:
     server_header: "squid/5.7"
     realm: "Squid proxy-caching web server"
 
+  snmp:
+    # An SNMP agent on UDP. In v1 and v2c the community string is the credential,
+    # sent in the clear on every request, and this is what onesixtyone and
+    # snmpwalk spray: "public", "private", the vendor defaults. The decoy records
+    # every community, the operation, and the OIDs — a SetRequest is an attempt to
+    # reconfigure the device. It never answers: SNMP is the internet's favourite
+    # UDP amplification protocol, and a GETBULK reply can dwarf its request, so an
+    # agent that responded could be turned into a reflector. Capturing the
+    # community needs no reply — it is in the request.
+    enabled: true
+    # 161/udp is privileged, so wisp binds an unprivileged port by default and you
+    # redirect 161 to it — the same pattern as ntp on 1123:
+    #
+    #   iptables -t nat -A PREROUTING -p udp --dport 161 -j REDIRECT --to-port 1161
+    addr: "0.0.0.0:1161"
+
   # LLMNR poisoning detection — the one module that is not a decoy, and the one
   # that sends traffic of its own.
   #
