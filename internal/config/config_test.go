@@ -62,6 +62,33 @@ func TestExampleConfigDocumentsEveryService(t *testing.T) {
 	}
 }
 
+// TestPortscanEnabledAndDocumented. Portscan is a detector, not a service, so it
+// lives outside the Services block and the loop above cannot catch it. It is on
+// by default — a quiet internal segment is exactly where a sweep should alert —
+// so guard both the default and its documentation here.
+func TestPortscanEnabledAndDocumented(t *testing.T) {
+	if !Default().Portscan.Enabled {
+		t.Error("portscan is off by default; a quiet segment should flag a sweep")
+	}
+	if Default().Portscan.Threshold <= 0 {
+		t.Error("portscan threshold default is not positive")
+	}
+
+	b, err := os.ReadFile(examplePath)
+	if err != nil {
+		t.Fatalf("read example: %v", err)
+	}
+	var raw struct {
+		Portscan map[string]any `yaml:"portscan"`
+	}
+	if err := yaml.Unmarshal(b, &raw); err != nil {
+		t.Fatalf("parse example: %v", err)
+	}
+	if raw.Portscan == nil {
+		t.Errorf("portscan is not documented in %s", filepath.Base(examplePath))
+	}
+}
+
 // TestDefaultsBindDistinctPorts. Every service is enabled out of the box, so a
 // duplicated default address means one of them silently fails to bind on every
 // fresh install.

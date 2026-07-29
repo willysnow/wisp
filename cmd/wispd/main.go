@@ -22,6 +22,7 @@ import (
 	"github.com/willysnow/wisp/internal/build"
 	"github.com/willysnow/wisp/internal/config"
 	"github.com/willysnow/wisp/internal/event"
+	"github.com/willysnow/wisp/internal/portscan"
 	"github.com/willysnow/wisp/internal/service"
 	"github.com/willysnow/wisp/internal/service/bannersvc"
 	"github.com/willysnow/wisp/internal/service/dockersvc"
@@ -265,7 +266,29 @@ func buildEmitter(cfg *config.Config) (event.Emitter, func(), error) {
 		out.Emit(e)
 	})
 
-	return emit, func() {
+	// The portscan detector is the outermost emitter: it observes every event a
+	// service reports — before the rate limiter, so a flood still feeds
+	// detection — then forwards it, and injects its own `portscan` events back
+	// through the node-stamping and limiting below.
+	var final event.Emitter = emit
+	if pc := cfg.Portscan; pc.Enabled {
+		window, err := parseDuration("portscan.window", pc.Window)
+		if err != nil {
+			return nil, nil, err
+		}
+		cooldown, err := parseDuration("portscan.cooldown", pc.Cooldown)
+		if err != nil {
+			return nil, nil, err
+		}
+		final = portscan.New(emit, portscan.Config{
+			Threshold: pc.Threshold,
+			Window:    window,
+			Cooldown:  cooldown,
+			Ignore:    pc.IgnoreSources,
+		})
+	}
+
+	return final, func() {
 		for _, c := range closers {
 			c()
 		}

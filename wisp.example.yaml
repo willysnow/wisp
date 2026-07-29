@@ -500,3 +500,24 @@ services:
       name: rdp
       addr: "0.0.0.0:3389"
       banner: ""
+
+# Port-scan detection by correlation, not packet capture. It is not a service —
+# it binds no port — but a detector that watches the events every decoy above
+# already emits and flags a source that touches many of them in a short window.
+# That keeps it cross-platform and unprivileged, at the cost of only seeing the
+# ports wisp binds and only scans that complete a connection; a stealth SYN scan
+# to an unbound port is invisible to it (its events say method=connect). Packet-
+# level detection of the stealth scans is a Linux-only, privileged addition that
+# is not part of this build.
+portscan:
+  enabled: true
+  # A source that touches this many distinct ports within the window is a scan.
+  threshold: 5
+  window: "60s"
+  # At most one portscan event per source per cooldown, so a thousand-port sweep
+  # is one alert, not nine hundred.
+  cooldown: "5m"
+  # Never treated as scanners — monitoring, health checks, loopback.
+  ignore_sources:
+    - "127.0.0.1"
+    - "::1"

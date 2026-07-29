@@ -70,6 +70,11 @@ var HighValueKinds = []string{
 	// to come — it is one in progress.
 	"llmnr_poisoned",
 
+	// One source sweeping many of the sensor's ports. On an internal decoy,
+	// which nothing legitimate should touch at all, a scan is reconnaissance in
+	// progress and worth the protected budget the same way a credential is.
+	"portscan",
+
 	// Raised by the console, not a sensor: a sensor that has stopped reporting
 	// looks the same as a quiet network, and one of those two is an emergency.
 	"sensor_silent",

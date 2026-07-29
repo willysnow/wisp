@@ -23,6 +23,31 @@ type Config struct {
 	Device   Device   `yaml:"device"`
 	Log      Log      `yaml:"log"`
 	Services Services `yaml:"services"`
+	// Portscan is a detector, not a listener, so it sits beside Services rather
+	// than in it — it binds no port and correlates the events the others emit.
+	Portscan Portscan `yaml:"portscan"`
+}
+
+// Portscan flags a source that sweeps many of the sensor's ports in a short
+// window. It is not a service: it binds nothing and captures no packets, it
+// watches the events every decoy already emits. That makes it cross-platform
+// and unprivileged, at the cost of only seeing the ports wisp binds and only
+// scans that complete a connection — a stealth SYN scan to an unbound port is
+// invisible to it, which is why its events say `method=connect`.
+type Portscan struct {
+	// Enabled defaults to true. A quiet internal segment is exactly where a
+	// sweep across the decoy's ports is worth an alert.
+	Enabled bool `yaml:"enabled"`
+	// Threshold is how many distinct ports one source must touch, within Window,
+	// to count as a scan. Zero uses the built-in default.
+	Threshold int    `yaml:"threshold"`
+	Window    string `yaml:"window"`
+	// Cooldown is the least time between portscan events for one source, so a
+	// thousand-port sweep is one alert, not nine hundred.
+	Cooldown string `yaml:"cooldown"`
+	// IgnoreSources are never treated as scanners — monitoring, health checks,
+	// loopback.
+	IgnoreSources []string `yaml:"ignore_sources"`
 }
 
 // Device gives the sensor one identity instead of several.
@@ -731,6 +756,13 @@ func Default() *Config {
 				// empty and the catcher just records the client's first bytes.
 				{Enabled: true, Name: "rdp", Addr: "0.0.0.0:3389", Banner: ""},
 			},
+		},
+		Portscan: Portscan{
+			Enabled:       true,
+			Threshold:     5,
+			Window:        "60s",
+			Cooldown:      "5m",
+			IgnoreSources: []string{"127.0.0.1", "::1"},
 		},
 	}
 }

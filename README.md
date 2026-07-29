@@ -40,7 +40,7 @@ plus 9 decoys OpenCanary does not have.
 |---|---|---|
 | Protocol modules | 21 | **19** + 9 new decoys |
 | Implemented here | — | `ssh`, `http`, `https`, `telnet`, `ftp`, `redis`, `tftp`, `ntp`, `git`, `mongodb`, `mysql`, `mssql`, `smb`, `vnc`, `sip`, HTTP proxy, `snmp`, `llmnr`, TCP banner |
-| Still missing | — | RDP, portscan |
+| Still missing | — | RDP, portscan (packet-level) |
 | SMB | yes, via external Samba | **native** — no Samba, captures NetNTLMv2 |
 | Cloud / container / CI / LLM decoys | no | **yes** (`k8s`, `kubelet`, `docker`, `imds`, `elasticsearch`, `jenkins`, `gitlab`, `ollama`, `mcp`) |
 | Alerting | file, syslog, HPFeeds, email, webhook, + separate dedup daemon | JSONL, syslog, HPFeeds, email, LINE, webhook (Slack/Teams/Discord), **dedup built in** |
@@ -53,6 +53,14 @@ enough to see a scan or a probe, but it cannot capture credentials the way a
 real emulator does. It ships pointed at RDP by default, which has no native
 emulator yet: X.224 catches the connection, but capturing a hash there needs
 NLA/CredSSP.
+
+Portscan is listed as still-missing because OpenCanary's is packet-level — it
+sees a stealth SYN/NULL/FIN scan to any closed port. wisp ships the
+cross-platform, zero-privilege half of it: a detector that correlates the events
+the decoys already emit and flags a source sweeping many of the sensor's ports.
+That catches the common "someone is scanning me" case everywhere, with no packet
+capture; the packet-level detection that would match OpenCanary is a Linux-only,
+privileged addition that is not in this build. See the `portscan` row below.
 
 If you need full coverage today, run OpenCanary. Run `wisp` if you want the LLM
 decoy, or if the Python/Samba dependency chain is what is stopping you from
@@ -81,6 +89,7 @@ deploying a honeypot at all.
 | `snmp` | 161/udp | the **community string** (v1/v2c credential) and OIDs — never answers, so no amplification |
 | `llmnr` | outbound | **an active poisoner on the segment**, and the address it claims |
 | banner | any | first bytes sent, for ports without a real emulator |
+| `portscan` | correlation | **a source sweeping the sensor's ports** — fan-out, no packet capture (`method=connect`) |
 | `ollama` | 11434/tcp | **model-list recon, and the actual prompts sent to your "GPU"** |
 | `k8s` | 6443/tls | **stolen service-account bearer tokens**, client certs, resources probed |
 | `kubelet` | 10250/tls | **the command they ran inside a pod**, and the token they ran it with |
@@ -318,6 +327,27 @@ turned into a reflector aimed at a spoofed victim. The community arrives in the
 request, so capturing it needs no reply; the decoy listens, records, and stays
 silent, which is also what a firewalled agent looks like. `SECURITY.md` lists the
 silence as a deliberate property, not a defect.
+
+**`portscan` is not a decoy but a detector, and it captures nothing new — it
+correlates.** wisp already binds two dozen ports; a host sweep lights up a whole
+row of them, so instead of adding a packet sniffer, the detector watches the
+events the decoys already emit and flags a source that touches many distinct
+ports in a short window. It sits in the pipeline outside the rate limiter, so a
+flood still feeds it, and it collapses a thousand-port sweep into one event
+naming the services swept:
+
+```
+portscan  src_ip=10.0.0.9  ports=14  window=8s  method=connect
+          services=ftp,mongodb,mysql,redis,smb,ssh,vnc
+```
+
+This is the cross-platform, zero-dependency, zero-privilege half of portscan
+detection, and it is honest about its blind spots: it sees only the ports wisp
+binds, and only scans that complete a connection — a stealth SYN/NULL/FIN scan to
+an unbound port never reaches a listener, which is why the event says
+`method=connect`. Catching those needs packet capture — a Linux-only, privileged
+addition that reads the wire but, unlike the fingerprint spoofing wisp will not
+do, never writes to it. It is designed but not in this build.
 
 **`imds` listens on an ordinary port by default (`8169`), not on
 169.254.169.254.** That address has to exist on the host before anything can
@@ -860,6 +890,7 @@ internal/event/         the one event type every service emits
 internal/persona/       the device this sensor claims to be, on every port
 internal/sink/          console + JSONL output with rotation, remote delivery,
                         hpfeeds, rate limiting
+internal/portscan/      fan-out scan detection, correlated from the event stream
 internal/tlsutil/       decoy certificates, and how a sensor trusts a console
 internal/service/       the Service interface
   httpdecoy/            the machinery the HTTP-shaped decoys share
@@ -984,8 +1015,12 @@ as anything other than a demo.
 - [x] SNMP — a hand-rolled BER/ASN.1 decoder captures the v1/v2c community
       string (the credential) and the OIDs, and the v3 username; it never
       answers, so it cannot be used as a UDP amplifier
-- [ ] Port-scan detection (OpenCanary drives iptables; a cross-platform version
-      needs pcap instead)
+- [~] Port-scan detection. The cross-platform half ships: a pure-Go detector
+      correlates the events the decoys emit and flags a source sweeping the
+      sensor's ports, no privileges, no deps. Packet-level detection of stealth
+      scans (matching OpenCanary's iptables approach) is designed as a Linux-only
+      AF_PACKET addition — read-only, so unlike fingerprint spoofing it is not
+      ruled out — but not yet built.
 - [ ] RDP — X.224 alone catches the connection; NLA is needed for credentials
 - [x] Native SMB2/3 with NTLMSSP — no external Samba. Captures NetNTLMv2 hashes
       and the *account name* used, not just "someone touched the share"
