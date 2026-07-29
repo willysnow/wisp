@@ -93,6 +93,10 @@ func main() {
 	}
 	defer closeSinks()
 
+	// When portscan is enabled it is the outermost emitter; recover it so its
+	// packet feeder can be started once the context exists.
+	detector, _ := emit.(*portscan.Detector)
+
 	services, err := buildServices(cfg)
 	if err != nil {
 		logger.Fatalf("service: %v", err)
@@ -103,6 +107,15 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// Packet-level portscan detection, when enabled. It shares the detector the
+	// emitter chain already built and needs the set of ports a listener serves,
+	// so it starts here, after the services are known. On anything but Linux with
+	// CAP_NET_RAW it degrades to fan-out detection and logs that it did.
+	if detector != nil && cfg.Portscan.PacketCapture {
+		tcp, udp := servedPorts(services)
+		detector.StartCapture(ctx, tcp, udp, logger.Printf)
+	}
 
 	var wg sync.WaitGroup
 	started := 0
@@ -306,6 +319,26 @@ func parseDuration(field, value string) (time.Duration, error) {
 		return 0, fmt.Errorf("%s: %w", field, err)
 	}
 	return d, nil
+}
+
+// servedPorts splits the enabled services into the TCP and UDP ports they bind,
+// so the portscan packet feeder can ignore probes to a port a listener already
+// handles — those are the event feeder's to report, not the sniffer's.
+func servedPorts(services []service.Service) (tcp, udp map[int]bool) {
+	tcp, udp = map[int]bool{}, map[int]bool{}
+	for _, svc := range services {
+		_, port := event.SplitHostPortString(svc.Addr())
+		if port == 0 {
+			continue
+		}
+		switch svc.(type) {
+		case service.StreamService:
+			tcp[port] = true
+		case service.PacketService:
+			udp[port] = true
+		}
+	}
+	return tcp, udp
 }
 
 func buildServices(cfg *config.Config) ([]service.Service, error) {

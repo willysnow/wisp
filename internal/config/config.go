@@ -48,6 +48,10 @@ type Portscan struct {
 	// IgnoreSources are never treated as scanners — monitoring, health checks,
 	// loopback.
 	IgnoreSources []string `yaml:"ignore_sources"`
+	// PacketCapture turns on packet-level detection of stealth scans to unbound
+	// ports. It works only on Linux and needs CAP_NET_RAW; where it cannot run it
+	// degrades to the fan-out detection above, so leaving it on costs nothing.
+	PacketCapture bool `yaml:"packet_capture"`
 }
 
 // Device gives the sensor one identity instead of several.
@@ -763,6 +767,9 @@ func Default() *Config {
 			Window:        "60s",
 			Cooldown:      "5m",
 			IgnoreSources: []string{"127.0.0.1", "::1"},
+			// On by default: it degrades to fan-out detection wherever it cannot
+			// run, so there is no reason not to try for the packet-level signal.
+			PacketCapture: true,
 		},
 	}
 }

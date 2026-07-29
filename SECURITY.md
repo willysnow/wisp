@@ -78,6 +78,12 @@ about them will be closed with a pointer here:
   protocol, and an agent that replied could be reflected at a spoofed victim; the
   community is in the request, so silence loses no capture. "It does not respond
   to snmpget" is the design.
+- **The portscan packet sniffer only reads.** Its Linux AF_PACKET socket captures
+  packets to classify stealth scans; it never sends one. It needs `CAP_NET_RAW`,
+  and where that is absent — or off Linux — it logs that it is unavailable and the
+  cross-platform fan-out detection carries on, so it is never a reason wisp fails
+  to start. Passive read-only capture is deliberately in scope; forging packets
+  (which TCP/IP fingerprint spoofing would require) is deliberately not.
 - **A credential-capturing decoy only captures what the client sends it.** The
   database and SMB decoys steer a client onto the authentication path that hands
   over a crackable — or, for MSSQL, cleartext — credential, but a client that

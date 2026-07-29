@@ -72,8 +72,12 @@ type tracker struct {
 }
 
 type portHit struct {
-	seen    time.Time
-	service string
+	seen time.Time
+	// service is set when the port was reached by a completed connection (the
+	// event feeder, D); scanType is set when a raw probe hit this — necessarily
+	// closed — port (the packet feeder, A1, on Linux). A port may have both.
+	service  string
+	scanType string
 }
 
 // New wraps next with a detector. Zero or negative config values fall back to
@@ -114,71 +118,100 @@ func (d *Detector) observe(e event.Event) {
 	if e.Kind == kind || e.SrcIP == "" || e.DstPort == 0 || d.ignore[e.SrcIP] {
 		return
 	}
-	now := d.now()
-
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.record(e.SrcIP, e.SrcPort, e.DstPort, e.Service, "", d.now())
+}
 
-	t := d.sources[e.SrcIP]
+// record folds one observation — a completed connection from the event feeder,
+// or a raw probe from the packet feeder — into a source's window, and emits a
+// portscan once the source crosses the threshold. The caller holds d.mu.
+func (d *Detector) record(srcIP string, srcPort, port int, service, scanType string, now time.Time) {
+	t := d.sources[srcIP]
 	if t == nil {
 		if len(d.sources) >= maxSources {
 			d.evictOldest()
 		}
 		t = &tracker{ports: map[int]portHit{}, first: now}
-		d.sources[e.SrcIP] = t
+		d.sources[srcIP] = t
 	}
-	t.ports[e.DstPort] = portHit{seen: now, service: e.Service}
+	h := t.ports[port]
+	h.seen = now
+	if service != "" {
+		h.service = service
+	}
+	if scanType != "" {
+		h.scanType = scanType
+	}
+	t.ports[port] = h
 	t.last = now
 
 	// Age out ports that have fallen outside the window.
-	for p, h := range t.ports {
-		if now.Sub(h.seen) > d.cfg.Window {
+	for p, ph := range t.ports {
+		if now.Sub(ph.seen) > d.cfg.Window {
 			delete(t.ports, p)
 		}
 	}
 	if len(t.ports) == 0 {
-		delete(d.sources, e.SrcIP)
+		delete(d.sources, srcIP)
 		return
 	}
 
 	if len(t.ports) >= d.cfg.Threshold &&
 		(t.lastEmit.IsZero() || now.Sub(t.lastEmit) >= d.cfg.Cooldown) {
 		t.lastEmit = now
-		d.emitScan(e, t, now)
+		d.emitScan(srcIP, srcPort, port, t, now)
 	}
 }
 
-func (d *Detector) emitScan(last event.Event, t *tracker, now time.Time) {
-	ev := event.NewRaw(name, kind, last.SrcIP, last.SrcPort, last.DstPort)
+func (d *Detector) emitScan(srcIP string, srcPort, lastPort int, t *tracker, now time.Time) {
+	ev := event.NewRaw(name, kind, srcIP, srcPort, lastPort)
 	ev.Data["ports"] = len(t.ports)
 	ev.Data["window_seconds"] = int(d.cfg.Window.Seconds())
 	ev.Data["duration_seconds"] = int(now.Sub(t.first).Seconds())
-	// A fan-out detector only ever sees completed connections; naming the method
-	// keeps the event honest about what it did and did not observe.
-	ev.Data["method"] = "connect"
-	if svcs := serviceList(t); len(svcs) > 0 {
-		ev.Data["services"] = strings.Join(svcs, ",")
+
+	services, scanTypes := summarize(t)
+	if len(scanTypes) > 0 {
+		// A raw probe reached a closed port — packet-level evidence the fan-out
+		// feeder alone could never have produced.
+		ev.Data["method"] = "packet"
+		ev.Data["scan_types"] = strings.Join(scanTypes, ",")
+	} else {
+		// Only completed connections: the cross-platform baseline, and honest
+		// about seeing no stealth scans.
+		ev.Data["method"] = "connect"
+	}
+	if len(services) > 0 {
+		ev.Data["services"] = strings.Join(services, ",")
 	}
 	d.next.Emit(ev)
 }
 
-// serviceList is the distinct, sorted set of services the in-window ports
-// belonged to — the most legible summary of a sweep ("ssh,ftp,redis,mongodb").
-func serviceList(t *tracker) []string {
-	seen := map[string]bool{}
-	out := make([]string, 0, len(t.ports))
+// summarize returns the distinct, sorted service names and scan types across a
+// source's in-window ports — the most legible summary of a sweep
+// ("services=ssh,ftp,redis  scan_types=syn,xmas").
+func summarize(t *tracker) (services, scanTypes []string) {
+	svcSeen := map[string]bool{}
+	scanSeen := map[string]bool{}
 	for _, h := range t.ports {
-		if h.service == "" || seen[h.service] {
-			continue
+		if h.service != "" && !svcSeen[h.service] {
+			svcSeen[h.service] = true
+			services = append(services, h.service)
 		}
-		seen[h.service] = true
-		out = append(out, h.service)
+		if h.scanType != "" && !scanSeen[h.scanType] {
+			scanSeen[h.scanType] = true
+			scanTypes = append(scanTypes, h.scanType)
+		}
 	}
-	sort.Strings(out)
-	if len(out) > maxServices {
-		out = out[:maxServices]
+	sort.Strings(services)
+	sort.Strings(scanTypes)
+	if len(services) > maxServices {
+		services = services[:maxServices]
 	}
-	return out
+	if len(scanTypes) > maxServices {
+		scanTypes = scanTypes[:maxServices]
+	}
+	return services, scanTypes
 }
 
 // evictOldest drops the least-recently-active source. Called only at the cap,

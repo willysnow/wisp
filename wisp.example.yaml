@@ -501,14 +501,13 @@ services:
       addr: "0.0.0.0:3389"
       banner: ""
 
-# Port-scan detection by correlation, not packet capture. It is not a service —
-# it binds no port — but a detector that watches the events every decoy above
-# already emits and flags a source that touches many of them in a short window.
-# That keeps it cross-platform and unprivileged, at the cost of only seeing the
-# ports wisp binds and only scans that complete a connection; a stealth SYN scan
-# to an unbound port is invisible to it (its events say method=connect). Packet-
-# level detection of the stealth scans is a Linux-only, privileged addition that
-# is not part of this build.
+# Port-scan detection. It is not a service — it binds no port — but a detector
+# that watches the events every decoy above already emits and flags a source
+# that touches many of them in a short window. That baseline is cross-platform
+# and unprivileged, but sees only the ports wisp binds and only scans that
+# complete a connection (its events say method=connect). Packet capture adds
+# detection of stealth SYN/NULL/FIN/XMAS/UDP scans to unbound ports — that is the
+# packet-level half, and its events carry a scan_type.
 portscan:
   enabled: true
   # A source that touches this many distinct ports within the window is a scan.
@@ -521,3 +520,8 @@ portscan:
   ignore_sources:
     - "127.0.0.1"
     - "::1"
+  # Packet-level detection of stealth scans. Works only on Linux and needs
+  # CAP_NET_RAW (grant it, or add NET_RAW to the container); where it cannot run
+  # it degrades to the fan-out detection above, so leaving it on costs nothing.
+  # The socket only reads — it never sends — so it is a sniffer, not a spoofer.
+  packet_capture: true
