@@ -37,8 +37,15 @@ import (
 	"net"
 
 	"github.com/willysnow/wisp/internal/event"
+	"github.com/willysnow/wisp/internal/ntlm"
 	"github.com/willysnow/wisp/internal/service"
 )
+
+// identity is what this "server" calls itself in the NTLM challenge — the names
+// a client folds into the material it hashes.
+func (s *Service) identity() ntlm.Identity {
+	return ntlm.Identity{Computer: s.computerName, Domain: s.domainName, DNS: s.dnsName}
+}
 
 const name = "smb"
 
@@ -167,7 +174,7 @@ type conn struct {
 
 func (s *Service) handle(nc net.Conn, emit event.Emitter) {
 	c := &conn{Conn: nc, svc: s, emit: emit}
-	c.challenge = fixedChallenge
+	c.challenge = ntlm.FixedChallenge
 
 	// A connection on which nothing was ever said is a bare port touch — a
 	// scan — and worth exactly one event. A client that speaks produces its own

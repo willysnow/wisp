@@ -10,19 +10,6 @@ import (
 
 var errBadLength = errors.New("smb: message length out of range")
 
-// fixedChallenge is the 8-byte server challenge every NTLM handshake here is
-// answered with.
-//
-// It is fixed, and it is this exact value, on purpose. A NetNTLMv2 response is
-// only crackable offline if whoever cracks it knows the challenge the client
-// hashed against — so a decoy that wants to hand an analyst a usable hash has to
-// commit to one and record it. 1122334455667788 is the value Responder and
-// Impacket's ntlmrelayx use, which means every existing cracking workflow
-// already expects it. Choosing it does not weaken anyone: the credential being
-// captured is the intruder's, and knowing the challenge does not help attack the
-// server that issued it.
-var fixedChallenge = [8]byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88}
-
 // le is a shorthand for the little-endian byte order SMB uses throughout.
 var le = binary.LittleEndian
 

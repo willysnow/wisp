@@ -43,6 +43,7 @@ import (
 	"github.com/willysnow/wisp/internal/service/ntpsvc"
 	"github.com/willysnow/wisp/internal/service/ollamasvc"
 	"github.com/willysnow/wisp/internal/service/proxysvc"
+	"github.com/willysnow/wisp/internal/service/rdpsvc"
 	"github.com/willysnow/wisp/internal/service/redissvc"
 	"github.com/willysnow/wisp/internal/service/sipsvc"
 	"github.com/willysnow/wisp/internal/service/smbsvc"
@@ -428,6 +429,13 @@ func buildServices(cfg *config.Config) ([]service.Service, error) {
 	}
 	if c := cfg.Services.VNC; c.Enabled {
 		out = append(out, vncsvc.New(c.Addr, c.Version))
+	}
+	if c := cfg.Services.RDP; c.Enabled {
+		s, err := rdpsvc.New(c.Addr, c.Cert, c.Key)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, s)
 	}
 	if c := cfg.Services.SIP; c.Enabled {
 		out = append(out, sipsvc.New(c.Addr, c.Realm, c.Server))

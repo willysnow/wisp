@@ -91,8 +91,9 @@ about them will be closed with a pointer here:
   has no certificate, so a client that requires TLS or uses Windows/integrated
   authentication is recorded only as an attempt; the MySQL decoy captures the
   native-password response, not a `caching_sha2_password` secret carried over
-  TLS; SMB captures NTLMv2, not Kerberos. This is a property of not holding the
-  keys a real server would, not a weakness.
+  TLS; SMB captures NTLMv2, not Kerberos; the RDP decoy captures the CredSSP/NLA
+  NetNTLMv2, not the legacy standard-security or plain-TLS credential path. This
+  is a property of not holding the keys a real server would, not a weakness.
 - **The console warns loudly about a shared ingest token, missing TLS, or no
   retention policy.** Those warnings describe configuration choices; the
   defaults are documented and the warnings say what to do.

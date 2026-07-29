@@ -2,6 +2,8 @@ package smbsvc
 
 import (
 	"time"
+
+	"github.com/willysnow/wisp/internal/ntlm"
 )
 
 // SMB2 dialect revisions, lowest to highest. The server picks one the client
@@ -96,7 +98,7 @@ func (c *conn) supported(d uint16) bool {
 // cannot use here falls straight through to NTLM — which is the mechanism whose
 // handshake hands over a crackable hash.
 func (c *conn) buildNegotiate(dialect uint16, contexts bool) []byte {
-	security := spnegoNegTokenInit()
+	security := ntlm.SPNEGONegTokenInit()
 
 	w := &buf{}
 	w.u16(65)      // StructureSize (64 fixed + 1)

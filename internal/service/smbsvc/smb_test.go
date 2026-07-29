@@ -12,8 +12,32 @@ import (
 
 	"golang.org/x/crypto/md4" //nolint:staticcheck // NTLM hashes the password with MD4; not our choice
 
+	"github.com/willysnow/wisp/internal/ntlm"
 	"github.com/willysnow/wisp/internal/service"
 	"github.com/willysnow/wisp/internal/service/servicetest"
+)
+
+// NTLM wire values the client-message builders below lay out by hand. The
+// production code takes the same values from internal/ntlm; the test restates
+// only the few it constructs raw messages with.
+var (
+	ntlmSignature = []byte("NTLMSSP\x00")
+	oidNTLMSSP    = []byte{0x2b, 0x06, 0x01, 0x04, 0x01, 0x82, 0x37, 0x02, 0x02, 0x0a} // 1.3.6.1.4.1.311.2.2.10
+)
+
+const (
+	ntlmNegotiate    = 1
+	ntlmAuthenticate = 3
+
+	flagUnicode     = 0x00000001
+	flagRequestTgt  = 0x00000004
+	flagNTLM        = 0x00000200
+	flagExtendedSec = 0x00080000
+
+	avEOL         = 0x0000
+	avNbComputer  = 0x0001
+	avNbDomain    = 0x0002
+	avDnsComputer = 0x0003
 )
 
 func start(t *testing.T) (*servicetest.StreamHarness, net.Conn) {
@@ -211,19 +235,19 @@ func ntlmv2Response(pass, user, domain string, serverChallenge [8]byte, blob []b
 
 // --- extracting our decoy's challenge from its response -------------------
 
-func challengeAndTargetInfo(t *testing.T, ntlm []byte) (challenge [8]byte, targetInfo []byte) {
+func challengeAndTargetInfo(t *testing.T, challengeMsg []byte) (challenge [8]byte, targetInfo []byte) {
 	t.Helper()
 
-	if len(ntlm) < 48 {
-		t.Fatalf("challenge message too short: %d bytes", len(ntlm))
+	if len(challengeMsg) < 48 {
+		t.Fatalf("challenge message too short: %d bytes", len(challengeMsg))
 	}
-	copy(challenge[:], ntlm[24:32])
-	tiLen := int(le.Uint16(ntlm[40:42]))
-	tiOff := int(le.Uint32(ntlm[44:48]))
-	if tiOff+tiLen > len(ntlm) {
+	copy(challenge[:], challengeMsg[24:32])
+	tiLen := int(le.Uint16(challengeMsg[40:42]))
+	tiOff := int(le.Uint32(challengeMsg[44:48]))
+	if tiOff+tiLen > len(challengeMsg) {
 		t.Fatalf("target info runs past the message")
 	}
-	targetInfo = ntlm[tiOff : tiOff+tiLen]
+	targetInfo = challengeMsg[tiOff : tiOff+tiLen]
 	return challenge, targetInfo
 }
 
@@ -245,15 +269,15 @@ func handshake(t *testing.T, conn net.Conn) (sessionID uint64, challenge [8]byte
 		t.Fatalf("session setup 1 status = %#x, want MORE_PROCESSING_REQUIRED", respStatus(resp))
 	}
 
-	ntlm := findNTLMSSP(sessionSecurity(t, respBody(resp)))
-	if ntlm == nil {
+	token := ntlm.FindNTLMSSP(sessionSecurity(t, respBody(resp)))
+	if token == nil {
 		t.Fatal("no NTLM challenge in the session setup response")
 	}
-	if kind, _ := ntlmType(ntlm); kind != ntlmChallenge {
+	if kind, _ := ntlm.MessageType(token); kind != ntlm.TypeChallenge {
 		t.Fatalf("response NTLM type = %d, want a challenge", kind)
 	}
 
-	challenge, targetInfo = challengeAndTargetInfo(t, ntlm)
+	challenge, targetInfo = challengeAndTargetInfo(t, token)
 	return respSessionID(resp), challenge, targetInfo
 }
 
@@ -291,8 +315,8 @@ func TestNetNTLMv2IsCapturedAndCracks(t *testing.T) {
 	h, conn := start(t)
 	sessionID, challenge, targetInfo := handshake(t, conn)
 
-	if challenge != fixedChallenge {
-		t.Errorf("server challenge = %x, want the fixed %x", challenge, fixedChallenge)
+	if challenge != ntlm.FixedChallenge {
+		t.Errorf("server challenge = %x, want the fixed %x", challenge, ntlm.FixedChallenge)
 	}
 
 	clientChallenge := [8]byte{0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04}
@@ -339,7 +363,7 @@ func TestNetNTLMv2IsCapturedAndCracks(t *testing.T) {
 	if gotUser != user || gotDomain != domain {
 		t.Errorf("line names %s::%s, want %s::%s", gotUser, gotDomain, user, domain)
 	}
-	if gotChallenge != hex.EncodeToString(fixedChallenge[:]) {
+	if gotChallenge != hex.EncodeToString(ntlm.FixedChallenge[:]) {
 		t.Errorf("line challenge = %s, want the fixed one", gotChallenge)
 	}
 	if gotProof != hex.EncodeToString(proof) {
@@ -517,7 +541,7 @@ func TestParseAuthenticateRejectsTruncation(t *testing.T) {
 	le.PutUint32(msg[24:28], 0xFFFFFFF0)
 
 	// Must not panic, and must not invent a credential from nothing.
-	if _, ok := parseAuthenticate(msg, fixedChallenge); ok {
+	if _, ok := ntlm.ParseAuthenticate(msg, ntlm.FixedChallenge); ok {
 		t.Error("a truncated authenticate message was accepted")
 	}
 }

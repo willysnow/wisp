@@ -419,6 +419,24 @@ services:
     # handshake. "3.8", "3.7" and "3.3" are the ones in the wild.
     version: "3.8"
 
+  rdp:
+    # A Remote Desktop server, emulated through the CredSSP handshake — the same
+    # NetNTLMv2 capture the SMB decoy does, over a different transport. The X.224
+    # negotiation front, in the clear, first yields the account the client
+    # volunteers in the mstshash cookie: the username an intruder came to
+    # brute-force. Then the decoy selects CredSSP (Network Level Authentication),
+    # terminates TLS, and runs the NTLM exchange inside it, so the client hands
+    # over a value that cracks offline as hashcat mode 5600. Nothing is accepted;
+    # the handshake stops at the AUTHENTICATE.
+    enabled: true
+    # 3389 is RDP's real port and is already unprivileged.
+    addr: "0.0.0.0:3389"
+    # Cert and Key back the TLS the CredSSP handshake runs inside. Generated on
+    # first run if absent. Keep them: a certificate that changes every restart is
+    # a honeypot fingerprint.
+    cert: "rdp-cert.pem"
+    key: "rdp-key.pem"
+
   sip:
     # A VoIP server on UDP, the protocol sipvicious and friendly-scanner sweep
     # for. It answers OPTIONS with 200 OK — which is how svmap decides a PBX is
@@ -494,11 +512,12 @@ services:
   # mysql, mssql, mongodb, …), prefer it — it captures credentials this cannot.
   banners:
     - enabled: true
-      # RDP has no real emulator yet: X.224 alone catches the connection, but
-      # capturing a hash needs NLA/CredSSP. The catcher sends nothing (RDP has
-      # no greeting) and records the client's X.224 connection request.
-      name: rdp
-      addr: "0.0.0.0:3389"
+      # Memcached has no real emulator here: an exposed, unauthenticated instance
+      # is a data-theft and amplification target, and the catcher records the
+      # client's first bytes — enough to see the probe. Memcached does not greet,
+      # so the banner is empty.
+      name: memcached
+      addr: "0.0.0.0:11211"
       banner: ""
 
 # Port-scan detection. It is not a service — it binds no port — but a detector

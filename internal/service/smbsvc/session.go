@@ -2,6 +2,7 @@ package smbsvc
 
 import (
 	"github.com/willysnow/wisp/internal/event"
+	"github.com/willysnow/wisp/internal/ntlm"
 )
 
 // sessionSetup drives the two-step NTLM handshake.
@@ -14,26 +15,26 @@ import (
 // the refusal.
 func (c *conn) sessionSetup(h header, msg []byte) bool {
 	security := sessionSetupSecurity(msg)
-	ntlm := findNTLMSSP(security)
-	if ntlm == nil {
+	token := ntlm.FindNTLMSSP(security)
+	if token == nil {
 		// A session setup with no NTLM token — a Kerberos attempt, or an
 		// anonymous bind. Nothing crackable is coming, so refuse and let the
 		// client decide what to do next.
-		return c.writeMessage(h, statusLogonFailure, sessionSetupResponse(spnegoReject()))
+		return c.writeMessage(h, statusLogonFailure, sessionSetupResponse(ntlm.SPNEGOReject()))
 	}
 
-	kind, ok := ntlmType(ntlm)
+	kind, ok := ntlm.MessageType(token)
 	if !ok {
-		return c.writeMessage(h, statusLogonFailure, sessionSetupResponse(spnegoReject()))
+		return c.writeMessage(h, statusLogonFailure, sessionSetupResponse(ntlm.SPNEGOReject()))
 	}
 
 	switch kind {
-	case ntlmNegotiate:
+	case ntlm.TypeNegotiate:
 		// Issue the challenge. The session id is invented here and echoed by
 		// the client on its next message; its value does not matter because no
 		// real session is ever keyed to it.
-		challenge := c.svc.buildChallenge(c.challenge)
-		body := sessionSetupResponse(spnegoChallenge(challenge))
+		challenge := ntlm.Challenge(c.svc.identity(), c.challenge)
+		body := sessionSetupResponse(ntlm.SPNEGOChallenge(challenge))
 
 		resp := h
 		if resp.sessionID == 0 {
@@ -41,15 +42,15 @@ func (c *conn) sessionSetup(h header, msg []byte) bool {
 		}
 		return c.writeMessage(resp, statusMoreProcessingReq, body)
 
-	case ntlmAuthenticate:
-		c.capture(ntlm)
+	case ntlm.TypeAuthenticate:
+		c.capture(token)
 		// Always refused. A locked door invites the next key, which is how a
 		// single scan turns into a list of every credential the intruder
 		// tried.
-		return c.writeMessage(h, statusLogonFailure, sessionSetupResponse(spnegoReject()))
+		return c.writeMessage(h, statusLogonFailure, sessionSetupResponse(ntlm.SPNEGOReject()))
 
 	default:
-		return c.writeMessage(h, statusLogonFailure, sessionSetupResponse(spnegoReject()))
+		return c.writeMessage(h, statusLogonFailure, sessionSetupResponse(ntlm.SPNEGOReject()))
 	}
 }
 
@@ -59,36 +60,36 @@ func (c *conn) sessionSetup(h header, msg []byte) bool {
 // which is exactly what a password sprayer does — would otherwise turn one
 // visitor into a page of near-identical events, and the rate limiter should not
 // have to clean up after a decoy that volunteers the flood.
-func (c *conn) capture(ntlm []byte) {
+func (c *conn) capture(token []byte) {
 	if c.captured {
 		return
 	}
 
-	cred, ok := parseAuthenticate(ntlm, c.challenge)
+	cred, ok := ntlm.ParseAuthenticate(token, c.challenge)
 	if !ok {
 		return
 	}
 	c.captured = true
 
 	ev := event.New(name, "auth_attempt", c.RemoteAddr(), c.LocalAddr())
-	ev.Data["username"] = cred.user
-	if cred.domain != "" {
-		ev.Data["domain"] = cred.domain
+	ev.Data["username"] = cred.User
+	if cred.Domain != "" {
+		ev.Data["domain"] = cred.Domain
 	}
-	if cred.workstation != "" {
-		ev.Data["workstation"] = cred.workstation
+	if cred.Workstation != "" {
+		ev.Data["workstation"] = cred.Workstation
 	}
 	ev.Data["server_challenge"] = hexChallenge(c.challenge)
 
-	switch cred.version {
+	switch cred.Version {
 	case 2:
 		ev.Data["ntlm_version"] = "v2"
-		ev.Data["netntlmv2"] = truncate(cred.hashcat)
-		ev.Data["hashcat_mode"] = 5600
+		ev.Data["netntlmv2"] = truncate(cred.Hashcat)
+		ev.Data["hashcat_mode"] = cred.HashcatMode()
 	case 1:
 		ev.Data["ntlm_version"] = "v1"
-		ev.Data["netntlmv1"] = truncate(cred.hashcat)
-		ev.Data["hashcat_mode"] = 5500
+		ev.Data["netntlmv1"] = truncate(cred.Hashcat)
+		ev.Data["hashcat_mode"] = cred.HashcatMode()
 	}
 
 	c.emit.Emit(ev)

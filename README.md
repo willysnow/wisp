@@ -9,9 +9,9 @@ the query, the container spec, or the paths the intruder tried.
 > "Canarytokens" are Thinkst trademarks, and this project is an independent
 > reimplementation rather than a fork or a successor.
 
-> **Status: early.** `wisp` covers 20 of OpenCanary's 21 protocol modules and
-> is not yet a replacement for it — see [Honest comparison](#honest-comparison)
-> before you deploy it.
+> **Status: early.** `wisp` now covers all 21 of OpenCanary's protocol modules,
+> plus 9 decoys it does not have — but it is younger and less battle-tested. See
+> [Honest comparison](#honest-comparison) before you deploy it.
 
 ## Why this exists
 
@@ -33,14 +33,14 @@ at all.
 
 ## Honest comparison
 
-OpenCanary ships 21 protocol modules. `wisp` has reimplemented **20** of them,
+OpenCanary ships 21 protocol modules. `wisp` has reimplemented **all 21** of them,
 plus 9 decoys OpenCanary does not have.
 
 | | OpenCanary | wisp today |
 |---|---|---|
-| Protocol modules | 21 | **20** + 9 new decoys |
+| Protocol modules | 21 | **21** + 9 new decoys |
 | Implemented here | — | `ssh`, `http`, `https`, `telnet`, `ftp`, `redis`, `tftp`, `ntp`, `git`, `mongodb`, `mysql`, `mssql`, `smb`, `vnc`, `sip`, HTTP proxy, `snmp`, `llmnr`, TCP banner |
-| Still missing | — | RDP |
+| Still missing | — | none — all 21 |
 | SMB | yes, via external Samba | **native** — no Samba, captures NetNTLMv2 |
 | Cloud / container / CI / LLM decoys | no | **yes** (`k8s`, `kubelet`, `docker`, `imds`, `elasticsearch`, `jenkins`, `gitlab`, `ollama`, `mcp`) |
 | Alerting | file, syslog, HPFeeds, email, webhook, + separate dedup daemon | JSONL, syslog, HPFeeds, email, LINE, webhook (Slack/Teams/Discord), **dedup built in** |
@@ -50,9 +50,8 @@ plus 9 decoys OpenCanary does not have.
 
 The generic TCP banner catcher covers any additional port at connection level —
 enough to see a scan or a probe, but it cannot capture credentials the way a
-real emulator does. It ships pointed at RDP by default, which has no native
-emulator yet: X.224 catches the connection, but capturing a hash there needs
-NLA/CredSSP.
+real emulator does. It ships pointed at memcached by default, a commonly-probed
+service with no native emulator here.
 
 Portscan comes in two halves. A cross-platform, zero-privilege baseline
 correlates the events the decoys already emit and flags a source sweeping many
@@ -65,9 +64,11 @@ cross-platform baseline as a fallback OpenCanary has no equivalent for. The
 packet path is read-only, so unlike TCP/IP fingerprint spoofing (which would have
 to forge packets) it does not compromise anything. See the `portscan` row below.
 
-If you need full coverage today, run OpenCanary. Run `wisp` if you want the LLM
-decoy, or if the Python/Samba dependency chain is what is stopping you from
-deploying a honeypot at all.
+`wisp` now matches OpenCanary's protocol coverage and adds the cloud, container,
+CI and LLM decoys it has none of. OpenCanary is still the more battle-tested of
+the two, and that is the reason to weigh them; reach for `wisp` when the
+Python/Samba/Scapy dependency chain is what stops you deploying a honeypot at
+all, or when you want the LLM and MCP decoys.
 
 ## What it emulates today
 
@@ -87,6 +88,7 @@ deploying a honeypot at all.
 | `mssql` | 1433/tcp | usernames and the **cleartext password itself** — TDS obfuscation is reversible, not a hash |
 | `smb` | 445/tcp | **NetNTLMv2 hashes** and the account name — hashcat 5600, no Samba |
 | `vnc` | 5900/tcp | the **VNC-auth challenge-response** — cracks offline, John the Ripper `vnc` |
+| `rdp` | 3389/tcp | **NetNTLMv2 hashes** via CredSSP/NLA — hashcat 5600 — plus the `mstshash` username |
 | `sip` | 5060/udp | the **REGISTER digest** — cracks offline (hashcat 11400), plus scanner recon |
 | `http-proxy` | 3128/tcp | the **tunnel target** (SSRF/open-proxy intent) and cleartext proxy creds |
 | `snmp` | 161/udp | the **community string** (v1/v2c credential) and OIDs — never answers, so no amplification |
@@ -294,6 +296,23 @@ blocks. Every attempt ends in a security-result failure, so no framebuffer is
 ever served. Like `mysql` and `smb`, the load-bearing property has a test that
 computes a real response for a known password and cracks the captured line back
 to it.
+
+**`rdp` reads the username off the first packet, then captures the hash.** Every
+RDP session opens with an X.224 negotiation in the clear, before any TLS, and a
+client volunteers the account it is about to try as a routing cookie —
+`Cookie: mstshash=Administrator` — so the decoy has the targeted username before a
+credential is sent, alongside the security the client offered. Then it goes for
+the credential: it selects CredSSP (Network Level Authentication, the modern
+default), terminates TLS, and runs the NTLM exchange inside it. That yields a
+NetNTLMv2 response — the identical hashcat-5600 artifact the `smb` decoy captures,
+over a different transport, and literally the same code: the NTLM challenge and
+the NetNTLMv2 extraction live in `internal/ntlm`, which both decoys wrap. The one
+DER the decoy builds is the CredSSP `TSRequest` that carries its challenge;
+everything inbound is located by the NTLM signature, the way SMB reads SPNEGO.
+Nothing is granted: the handshake stops at the AUTHENTICATE, before the
+public-key exchange a real success continues with. What it does not open is the
+legacy path — a client that speaks only standard RDP security or plain-TLS,
+never CredSSP, is recorded at the negotiation but hands over no hash.
 
 **`sip` looks like a live PBX so a scanner escalates.** It is the protocol
 sipvicious and friendly-scanner sweep for, and the decoy plays the part: it
@@ -896,6 +915,7 @@ cmd/wispd/              sensor entry point, service wiring, signal handling
 cmd/wisp-console/       console server, sensor/user CLI, healthcheck
 internal/config/        sensor YAML config with defaults-first loading
 internal/event/         the one event type every service emits
+internal/ntlm/          NTLMSSP challenge + NetNTLMv2 capture, shared by smb + rdp
 internal/persona/       the device this sensor claims to be, on every port
 internal/sink/          console + JSONL output with rotation, remote delivery,
                         hpfeeds, rate limiting
@@ -912,6 +932,7 @@ internal/service/       the Service interface
   mssqlsvc/             MSSQL/TDS handshake and cleartext LOGIN7 password capture
   smbsvc/               SMB2/3 and NTLMv2 hash capture, no external Samba
   vncsvc/               RFB handshake and VNC-auth challenge-response capture
+  rdpsvc/               RDP negotiation + CredSSP/NLA NetNTLMv2 capture over TLS
   sipsvc/               SIP over UDP, REGISTER digest capture (hashcat 11400)
   proxysvc/             HTTP forward proxy: tunnel target and cleartext creds
   snmpsvc/              SNMP over UDP, community-string capture (hand-rolled BER)
@@ -1032,7 +1053,11 @@ as anything other than a demo.
       SYN/NULL/FIN/XMAS/UDP scans to unbound ports, matching OpenCanary's
       Linux-only iptables approach without the iptables. Read-only capture, so
       unlike fingerprint spoofing it does not forge packets.
-- [ ] RDP — X.224 alone catches the connection; NLA is needed for credentials
+- [x] RDP. The X.224 negotiation captures the `mstshash` username in the clear;
+      then the decoy selects CredSSP/NLA, terminates TLS, and runs the NTLM
+      exchange for a NetNTLMv2 hash — the same hashcat-5600 artifact the SMB decoy
+      captures, sharing the `internal/ntlm` code. This completes all 21 of
+      OpenCanary's protocol modules.
 - [x] Native SMB2/3 with NTLMSSP — no external Samba. Captures NetNTLMv2 hashes
       and the *account name* used, not just "someone touched the share"
 - [x] Alerting parity: email, webhook, LINE, and alert dedup
@@ -1076,10 +1101,10 @@ as anything other than a demo.
 
 ## Contributing
 
-The most useful contribution is a protocol module — the gap between 20 and 21 is
-what stops this being usable as anything other than a demo. The checklist, and
-the constraints every change has to respect, are in
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Protocol coverage is complete, so the most useful contributions now are the ones
+that make it battle-tested: real-world hardening, a new decoy for the 2026 attack
+surface, or an improvement to a capture's fidelity. The checklist, and the
+constraints every change has to respect, are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 Security problems go through [private vulnerability reporting][security], never
 a public issue: a public report on a detection tool tells the people it detects

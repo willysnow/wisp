@@ -256,6 +256,7 @@ type Services struct {
 	MSSQL         MSSQL         `yaml:"mssql"`
 	SMB           SMB           `yaml:"smb"`
 	VNC           VNC           `yaml:"vnc"`
+	RDP           RDP           `yaml:"rdp"`
 	SIP           SIP           `yaml:"sip"`
 	HTTPProxy     HTTPProxy     `yaml:"http_proxy"`
 	SNMP          SNMP          `yaml:"snmp"`
@@ -363,6 +364,22 @@ type VNC struct {
 	// Version is the RFB protocol version offered first, e.g. "3.8". It decides
 	// which security handshake the exchange uses; empty falls back to 3.8.
 	Version string `yaml:"version"`
+}
+
+// RDP emulates a Remote Desktop server through the CredSSP handshake, which is
+// what makes a client hand over a NetNTLMv2 hash — the same crackable artifact
+// the SMB decoy captures, over a different transport. The X.224 negotiation
+// front, in the clear, also yields the account the client volunteers in the
+// mstshash routing cookie: the username an intruder came to brute-force, named
+// before any credential.
+type RDP struct {
+	Enabled bool   `yaml:"enabled"`
+	Addr    string `yaml:"addr"`
+	// Cert and Key back the TLS the CredSSP handshake runs inside. Generated on
+	// first run if absent. Keep them: a certificate that changes every restart is
+	// a honeypot fingerprint.
+	Cert string `yaml:"cert"`
+	Key  string `yaml:"key"`
 }
 
 // SIP emulates a VoIP server on UDP that answers OPTIONS to look like a live PBX
@@ -724,6 +741,13 @@ func Default() *Config {
 				Addr:    "0.0.0.0:5900",
 				Version: "3.8",
 			},
+			RDP: RDP{
+				// 3389 is RDP's real port and is already unprivileged.
+				Enabled: true,
+				Addr:    "0.0.0.0:3389",
+				Cert:    "rdp-cert.pem",
+				Key:     "rdp-key.pem",
+			},
 			SIP: SIP{
 				// 5060/udp is SIP's real port and is already unprivileged.
 				Enabled: true,
@@ -756,9 +780,10 @@ func Default() *Config {
 			},
 			Banners: []Banner{
 				// A demonstration of the generic catcher on a port without a
-				// real emulator yet. RDP sends no greeting, so the banner is
-				// empty and the catcher just records the client's first bytes.
-				{Enabled: true, Name: "rdp", Addr: "0.0.0.0:3389", Banner: ""},
+				// real emulator. Memcached greets with nothing, so the banner is
+				// empty and the catcher just records the client's first bytes —
+				// enough to see an unauthenticated-memcached probe.
+				{Enabled: true, Name: "memcached", Addr: "0.0.0.0:11211", Banner: ""},
 			},
 		},
 		Portscan: Portscan{

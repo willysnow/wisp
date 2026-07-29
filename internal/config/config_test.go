@@ -128,6 +128,7 @@ func TestDefaultsBindDistinctPorts(t *testing.T) {
 	check("mssql", s.MSSQL.Addr, s.MSSQL.Enabled)
 	check("smb", s.SMB.Addr, s.SMB.Enabled)
 	check("vnc", s.VNC.Addr, s.VNC.Enabled)
+	check("rdp", s.RDP.Addr, s.RDP.Enabled)
 	check("http_proxy", s.HTTPProxy.Addr, s.HTTPProxy.Enabled)
 	for _, b := range s.Banners {
 		check("banner "+b.Name, b.Addr, b.Enabled)
