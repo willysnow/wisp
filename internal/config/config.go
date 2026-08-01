@@ -232,6 +232,43 @@ type Remote struct {
 	InsecureSkipVerify bool `yaml:"insecure_skip_verify"`
 }
 
+// TokenEnvVar and RemoteURLEnvVar are the environment variables a sensor reads
+// its console token and console URL from when the matching config keys are left
+// empty. TokenEnvVar mirrors the console's own WISP_CONSOLE_TOKEN.
+//
+// Together they let a sensor reach a console with no config file at all — two
+// variables are enough — and they let a fleet keep one wisp.yaml in version
+// control while each host supplies its own out of band, through systemd's
+// EnvironmentFile, a container's environment, or a shell export.
+const (
+	TokenEnvVar     = "WISP_TOKEN"
+	RemoteURLEnvVar = "WISP_REMOTE_URL"
+)
+
+// ResolveToken returns the console token, preferring the value set in the
+// configuration file and falling back to the WISP_TOKEN environment variable
+// when it is empty. The file wins so an explicit setting is never silently
+// overridden by a stray variable in the environment; the fallback is what lets
+// one config file ship to every sensor with the secret supplied per host.
+func (r Remote) ResolveToken() string {
+	if r.Token != "" {
+		return r.Token
+	}
+	return os.Getenv(TokenEnvVar)
+}
+
+// ResolveURL returns the console URL, preferring log.remote.url and falling back
+// to WISP_REMOTE_URL when it is empty. Because an empty URL is also what
+// disables remote delivery, this is what lets `WISP_REMOTE_URL=... wispd` enable
+// it with no config file present. The file wins for the same reason as the
+// token: an explicit setting is a deliberate one.
+func (r Remote) ResolveURL() string {
+	if r.URL != "" {
+		return r.URL
+	}
+	return os.Getenv(RemoteURLEnvVar)
+}
+
 type Services struct {
 	SSH           SSH           `yaml:"ssh"`
 	HTTP          HTTP          `yaml:"http"`

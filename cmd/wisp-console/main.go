@@ -11,6 +11,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -249,11 +250,15 @@ func main() {
 		// else it can come from on a first run.
 		logger.Printf("generated shared ingest token: %s", ingestToken)
 	}
-	if bootstrapPassword != "" {
-		logger.Printf("created console operator %q with password: %s", bootstrapUser, bootstrapPassword)
-		logger.Printf("         Shown once. Change it with `wisp-console user passwd %s`.", bootstrapUser)
-	}
 	logTLS(logger, tlsSetup, *cfgPath)
+
+	// Last, and framed rather than logged: the operator password is generated on
+	// this first start and printed nowhere else, so a line that looks like every
+	// other timestamped note is a line that gets lost. Print it where the eye
+	// lands, in a block it cannot be mistaken for.
+	if bootstrapPassword != "" {
+		printBootstrapCredential(os.Stderr, bootstrapUser, bootstrapPassword)
+	}
 
 	// The certificate and key come from the TLS config, so both arguments are
 	// empty here. In acme mode there is no file at all — the manager answers
@@ -266,6 +271,21 @@ func main() {
 		logger.Fatalf("serve: %v", err)
 	}
 	logger.Print("shutting down")
+}
+
+// printBootstrapCredential frames the one-time operator password so it survives
+// the startup log. It writes raw, not through the timestamped logger, on
+// purpose: this password is generated on the first start and printed nowhere
+// else, and a bordered block with blank lines around it is what an operator
+// actually catches among the notes and warnings.
+func printBootstrapCredential(w io.Writer, username, password string) {
+	rule := strings.Repeat("=", 72)
+	fmt.Fprintf(w, "\n%s\n", rule)
+	fmt.Fprintln(w, "  CONSOLE OPERATOR CREATED — this password is shown once. Save it now.")
+	fmt.Fprintf(w, "\n      username:  %s\n", username)
+	fmt.Fprintf(w, "      password:  %s\n\n", password)
+	fmt.Fprintf(w, "  Change it later with:  wisp-console user passwd %s\n", username)
+	fmt.Fprintf(w, "%s\n\n", rule)
 }
 
 // logTLS says what the transport is doing, in the terms that matter: what

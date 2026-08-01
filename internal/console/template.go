@@ -41,9 +41,25 @@ a:hover{text-decoration:underline}
 .data{color:var(--dim);word-break:break-word}
 .data i{color:var(--fg);font-style:normal}
 .empty{padding:28px 14px;text-align:center;color:var(--dim)}
+/* Event rows are each a single link into the detail page. No nested links, so
+   the whole row is one target; filtering moves to the search box and the side
+   panels. Two lines — a meta line that wraps and a summary that ellipsises —
+   so the list never needs a horizontal scrollbar on a narrow screen. */
+.ev{display:block;padding:9px 14px;border-bottom:1px solid var(--line);
+color:var(--fg);text-decoration:none}
+.ev:last-child{border-bottom:0}
+.ev:hover{background:#232732;text-decoration:none}
+.ev .meta{display:flex;flex-wrap:wrap;gap:3px 12px;align-items:baseline}
+.ev .meta .t{color:var(--dim);white-space:nowrap}
+.ev .meta .svc{color:var(--cool)}
+.ev .meta .kind{white-space:nowrap}
+.ev .meta .kind.cred{color:var(--hot);font-weight:600}
+.ev .meta .kind.act{color:var(--warm)}
+.ev .meta .src{color:var(--dim);white-space:nowrap}
+.ev .sum{display:block;margin-top:2px;color:var(--dim);
+white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .side table td{font-size:12px}
 .num{text-align:right;color:var(--dim)}
-.bar{display:block;height:2px;background:var(--cool);margin-top:3px;border-radius:1px}
 .filters{padding:10px 14px;border-bottom:1px solid var(--line);color:var(--dim)}
 .filters a{margin-left:8px}
 .dot{color:var(--ok)}
@@ -117,29 +133,28 @@ mark{background:none;color:var(--warm);font-weight:600}
       <a href="/">clear</a>
     </div>
     {{end}}
-    <div class="wrap">
-    <table>
-      <tr><th>Time</th><th>Sensor</th><th>Service</th><th>Kind</th><th>Source</th><th>Detail</th></tr>
+    <div class="rows">
       {{range .Events}}
-      <tr>
-        <td class="t">{{.Time.Format "01-02 15:04:05"}}</td>
-        <td><a href="/?node={{.Node}}">{{.Node}}</a></td>
-        <td class="svc"><a href="/?service={{.Service}}">{{.Service}}</a></td>
-        <td class="kind {{if credential .Kind}}cred{{else if highvalue .Kind}}act{{end}}">{{.Kind}}</td>
-        <td class="src"><a href="/?src_ip={{.SrcIP}}">{{.SrcIP}}</a>:{{.SrcPort}} &rarr; :{{.DstPort}}</td>
-        <td class="data">{{range kv .Data}}<i>{{.}}</i>&nbsp; {{end}}</td>
-      </tr>
+      <a class="ev" href="/event/{{.ID}}">
+        <span class="meta">
+          <span class="t">{{.Time.Format "01-02 15:04:05"}}</span>
+          <span class="node">{{.Node}}</span>
+          <span class="svc">{{.Service}}</span>
+          <span class="kind {{if credential .Kind}}cred{{else if highvalue .Kind}}act{{end}}">{{.Kind}}</span>
+          <span class="src">{{.SrcIP}}:{{.SrcPort}} &rarr; :{{.DstPort}}</span>
+        </span>
+        {{$pairs := kv .Data}}{{if $pairs}}<span class="sum">{{range $pairs}}{{.}}&nbsp; {{end}}</span>{{end}}
+      </a>
       {{else}}
-      <tr><td class="empty" colspan="6">
+      <div class="empty">
         {{if .Filtered}}
         Nothing matches. Try a wider time window, or <a href="/">clear the filters</a>.
         {{else}}
         No events yet. Point a sensor at this console and wait for something to
         touch it &mdash; silence here is the expected state.
         {{end}}
-      </td></tr>
+      </div>
       {{end}}
-    </table>
     </div>
 
     {{if gt .Pages 1}}
@@ -189,6 +204,113 @@ mark{background:none;color:var(--warm);font-weight:600}
       </table>
     </section>
   </div>
+</main>
+</body></html>
+`
+
+// eventHTML is the single-event detail page. It exists so the list can show a
+// summary and this can show everything: every data field in full, and the
+// source, service and sensor as links back into a filtered view. Like the rest
+// of the UI it is server-rendered and scriptless — a page, not a modal.
+const eventHTML = `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>event &middot; wisp console</title>
+<style>
+:root{--bg:#14161a;--panel:#1c1f26;--line:#2a2f39;--fg:#dfe3ea;--dim:#8b95a6;
+--hot:#ff6b6b;--warm:#ffb454;--cool:#5cc8ff;--ok:#5dd39e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+header{padding:16px 20px;border-bottom:1px solid var(--line);
+display:flex;flex-wrap:wrap;gap:16px;align-items:baseline}
+h1{font-size:15px;margin:0;letter-spacing:.5px}
+h1 span{color:var(--dim);font-weight:400}
+a{color:var(--cool);text-decoration:none}
+a:hover{text-decoration:underline}
+.who{margin-left:auto;color:var(--dim)}
+.who b{color:var(--fg);font-weight:600}
+form.inline{display:inline;margin-left:10px}
+button.link{background:none;border:0;padding:0;font:inherit;color:var(--cool);cursor:pointer}
+button.link:hover{text-decoration:underline}
+main{padding:20px;max-width:900px}
+section{background:var(--panel);border:1px solid var(--line);border-radius:6px;
+overflow:hidden;margin-bottom:20px}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--dim);
+margin:0;padding:10px 14px;border-bottom:1px solid var(--line)}
+.head{padding:14px;border-bottom:1px solid var(--line);
+display:flex;gap:10px;align-items:baseline;flex-wrap:wrap}
+.head .kind{font-size:16px;font-weight:600}
+.head .kind.cred{color:var(--hot)}
+.head .kind.act{color:var(--warm)}
+.head .on{color:var(--dim)}
+.head .t{color:var(--dim);margin-left:auto;white-space:nowrap}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line)}
+@media(max-width:560px){.grid{grid-template-columns:1fr}}
+.cell{background:var(--panel);padding:12px 14px}
+.cell .label{font-size:11px;text-transform:uppercase;letter-spacing:1px;
+color:var(--dim);margin-bottom:4px}
+.cell .value{color:var(--fg);word-break:break-word}
+.wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse}
+td{padding:8px 14px;text-align:left;vertical-align:top;border-bottom:1px solid var(--line)}
+tr:last-child td{border-bottom:0}
+.k{color:var(--dim);white-space:nowrap;width:1%;padding-right:20px}
+.v{color:var(--fg);word-break:break-word;white-space:pre-wrap}
+.empty{padding:22px 14px;text-align:center;color:var(--dim)}
+</style></head><body>
+
+<header>
+  <h1>wisp <span>console</span> &middot; event</h1>
+  <a href="/">&larr; events</a>
+  <span class="who">signed in as <b>{{.User}}</b>
+    <form class="inline" method="post" action="/logout">
+      <input type="hidden" name="csrf_token" value="{{.CSRF}}">
+      <button class="link" type="submit">sign out</button>
+    </form>
+  </span>
+</header>
+
+<main>
+  <section>
+    <div class="head">
+      <span class="kind {{if credential .Event.Kind}}cred{{else if highvalue .Event.Kind}}act{{end}}">{{.Event.Kind}}</span>
+      <span class="on">on</span>
+      <a href="/?service={{.Event.Service}}">{{.Event.Service}}</a>
+      <span class="t">{{.Event.Time.Format "2006-01-02 15:04:05 MST"}} &middot; {{ago .Event.Time}}</span>
+    </div>
+    <div class="grid">
+      <div class="cell">
+        <div class="label">Sensor</div>
+        <div class="value"><a href="/?node={{.Event.Node}}">{{.Event.Node}}</a></div>
+      </div>
+      <div class="cell">
+        <div class="label">Service</div>
+        <div class="value"><a href="/?service={{.Event.Service}}">{{.Event.Service}}</a></div>
+      </div>
+      <div class="cell">
+        <div class="label">Source</div>
+        <div class="value"><a href="/?src_ip={{.Event.SrcIP}}">{{.Event.SrcIP}}</a>:{{.Event.SrcPort}}</div>
+      </div>
+      <div class="cell">
+        <div class="label">Destination port</div>
+        <div class="value">:{{.Event.DstPort}}</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Captured data</h2>
+    <div class="wrap">
+    <table>
+      {{range .Data}}
+      <tr><td class="k">{{.Key}}</td><td class="v">{{.Value}}</td></tr>
+      {{else}}
+      <tr><td class="empty">No data fields on this event &mdash; the connection itself was the signal.</td></tr>
+      {{end}}
+    </table>
+    </div>
+  </section>
 </main>
 </body></html>
 `

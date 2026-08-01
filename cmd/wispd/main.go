@@ -226,13 +226,13 @@ func buildEmitter(cfg *config.Config) (event.Emitter, func(), error) {
 		sinks = append(sinks, hp)
 		closers = append(closers, hp.Close)
 	}
-	if u := cfg.Log.Remote.URL; u != "" {
+	if u := cfg.Log.Remote.ResolveURL(); u != "" {
 		r := cfg.Log.Remote
 		tlsCfg, err := tlsutil.ClientConfig(r.CAFile, r.Fingerprint, r.InsecureSkipVerify)
 		if err != nil {
 			return nil, nil, err
 		}
-		remote := sink.NewRemote(sink.RemoteOptions{URL: u, Token: r.Token, TLS: tlsCfg})
+		remote := sink.NewRemote(sink.RemoteOptions{URL: u, Token: r.ResolveToken(), TLS: tlsCfg})
 		sinks = append(sinks, remote)
 		closers = append(closers, remote.Close)
 	}

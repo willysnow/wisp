@@ -101,6 +101,7 @@ func New(st *store.Store, opts Options) (*Server, error) {
 	tmpl := template.New("console").Funcs(funcs)
 	for _, page := range []struct{ name, body string }{
 		{"index", indexHTML},
+		{"event", eventHTML},
 		{"login", loginHTML},
 		{"tokens", tokensHTML},
 	} {
@@ -148,6 +149,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/login", s.handleLogin)
 	mux.HandleFunc("/logout", s.handleLogout)
 	mux.HandleFunc("/tokens", s.requireLogin(s.handleTokens))
+	mux.HandleFunc("/event/", s.requireLogin(s.handleEvent))
 	mux.HandleFunc("/export.csv", s.requireLogin(s.handleExport))
 	mux.HandleFunc("/export.json", s.requireLogin(s.handleExport))
 	mux.HandleFunc("/", s.requireLogin(s.handleIndex))
@@ -384,6 +386,69 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, user string
 		// that is left.
 		return
 	}
+}
+
+// eventData backs the single-event detail page. The list crams every data
+// field into one cell; this is where it is laid out in full, so a row can stay a
+// summary and the whole value of a captured password or prompt is one click
+// away rather than truncated inline.
+type eventData struct {
+	Event store.Record
+	Data  []kvPair
+	User  string
+	CSRF  string
+}
+
+// kvPair is one field of an event's data map, rendered in full — unlike the
+// list, which caps values so a long prompt cannot stretch the table.
+type kvPair struct {
+	Key   string
+	Value string
+}
+
+func (s *Server) handleEvent(w http.ResponseWriter, r *http.Request, user string) {
+	id, err := strconv.ParseInt(strings.TrimPrefix(r.URL.Path, "/event/"), 10, 64)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	rec, ok, err := s.store.Event(r.Context(), id)
+	if err != nil {
+		http.Error(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+
+	s.uiHeaders(w)
+	if err := s.tmpl.ExecuteTemplate(w, "event", eventData{
+		Event: rec,
+		Data:  fullPairs(rec.Data),
+		User:  user,
+		CSRF:  s.issueCSRF(w, r),
+	}); err != nil {
+		return
+	}
+}
+
+// fullPairs renders an event's data map in the same stable order as the list,
+// but without shortValue's cap: the detail page is exactly where the untruncated
+// value belongs.
+func fullPairs(m map[string]any) []kvPair {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	out := make([]kvPair, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, kvPair{Key: k, Value: fmt.Sprint(m[k])})
+	}
+	return out
 }
 
 // sensorViews marks the sensors that have gone quiet. With no policy

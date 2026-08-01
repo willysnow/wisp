@@ -266,10 +266,35 @@ log:
     token: "wisp_..."
 ```
 
+Neither value has to live in the file. Leave `token` empty and wisp reads it
+from `WISP_TOKEN`; leave `url` empty and it reads `WISP_REMOTE_URL`. Set both and
+a sensor reaches a console with **no config file at all** — the quickest way to
+point one at a console you just started:
+
+```bash
+export WISP_TOKEN='wisp__...' WISP_REMOTE_URL='http://127.0.0.1:8001' && ./wispd
+```
+
+The same two variables let one `wisp.yaml` — the URL in it, the token left empty
+— ship to the whole fleet in version control while each host supplies its secret
+out of band. An explicit value in the file always wins over the variable. Supply
+the token whichever way matches how the sensor runs:
+
+```bash
+printf 'WISP_TOKEN=%s\n' 'wisp__...' | sudo tee /etc/wisp/wisp.env >/dev/null && sudo chmod 600 /etc/wisp/wisp.env && sudo systemctl restart wispd
+```
+
+```bash
+echo "WISP_TOKEN=wisp__..." >> .env
+```
+
+(The two lines are the systemd unit's `EnvironmentFile` and a `.env` beside
+`docker-compose.yml` — `.gitignore` both.)
+
 Then run the console:
 
 ```bash
-./wisp-console -addr :8000
+./wisp-console -addr :8001
 ```
 
 Each sensor gets its own token, and **the node name comes from the token, not
@@ -308,10 +333,34 @@ On its first start the console creates one operator account and prints the
 password once:
 
 ```
-created console operator "admin" with password: QOavm-F81rHgpHHQuX-Cqv48
+========================================================================
+  CONSOLE OPERATOR CREATED — this password is shown once. Save it now.
+
+      username:  admin
+      password:  pSymBGpoDhZdiRZUMVyEeUjt
+
+  Change it later with:  wisp-console user passwd admin
+========================================================================
 ```
 
-Manage accounts from the CLI:
+Miss it, or lose it later? It cannot be re-printed — only the hash is stored —
+but resetting is one command that generates a fresh password and prints it on
+the spot. It is safe to run while the console is up: the database is WAL-mode
+with a busy timeout, so the CLI and the server share it without either stopping.
+
+```bash
+./wisp-console user passwd admin
+```
+
+To set the password yourself instead of taking the generated one, pass
+`-password-stdin` (minimum 12 characters):
+
+```bash
+printf '%s\n' 'your-strong-password' | ./wisp-console user passwd admin -password-stdin
+```
+
+Add more operators, or list them, the same way — `user add` also prints a
+generated password once and accepts `-password-stdin`:
 
 ```bash
 ./wisp-console user add alice
@@ -319,13 +368,6 @@ Manage accounts from the CLI:
 
 ```bash
 ./wisp-console user list
-```
-
-`user add` and `user passwd` generate a password and print it once; pass
-`-password-stdin` to supply your own instead (minimum 12 characters):
-
-```bash
-printf '%s\n' "$NEW_PASSWORD" | ./wisp-console user passwd alice -password-stdin
 ```
 
 Changing a password signs out every session that account holds — a password is
@@ -508,6 +550,19 @@ Mint one from the console CLI:
 wisp-console token add -kind docx -memo "finance share"
 ```
 
+`token add` has to know the console's own address — it is what the planted token
+calls home to — so it fails until one is set. Either put `tokens.base_url` in
+`console.yaml`, or pass it on the command:
+
+```bash
+wisp-console token add -kind docx -memo "finance share" -url https://console.example.com
+```
+
+Use whatever address the planted data will call home from: `http://127.0.0.1:8001`
+while you are testing on the console's own box, but a name the intruder's machine
+can actually resolve for a token you really plant. A token pointing at
+`127.0.0.1` never fires once it leaves this host.
+
 `-memo` rides on every alert the token raises, so "which lure fired" needs no
 lookup. `token list` shows every token and its firings; `token show <id>`
 re-prints an artifact; `token disable <id>` stops recording new hits.
@@ -536,6 +591,23 @@ tokens:
     addr: ":53"
     answer: "127.0.0.1"                      # a black hole; only satisfies the resolver
 ```
+
+**Test one before you plant it.** The `http` kind is the easiest to trigger by
+hand: mint it, then fetch the URL it prints, the way an intruder's tool would.
+
+```bash
+wisp-console token add -kind http -url http://127.0.0.1:8001 -memo "test"
+```
+
+```bash
+curl http://127.0.0.1:8001/t/<id>          # the URL the command above printed
+```
+
+The fetch lands as a `token_triggered` event in the timeline and on the tokens
+page, exactly like a decoy capture — `/t/` is public by design, since the whole
+point is that an intruder trips it. A `docx` token fires the same way when Word
+opens it; a `dns` token when its hostname is resolved
+(`dig <id>.tokens.example.com`).
 
 How the `docx` and `dns` tokens actually fire, why a token id is not a secret,
 and what a callback can and cannot tell you are in

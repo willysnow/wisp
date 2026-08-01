@@ -16,6 +16,15 @@ ExecStart=/usr/local/bin/wispd -config /etc/wisp/wisp.yaml
 Restart=on-failure
 RestartSec=5s
 
+# The console token, and optionally its URL, kept out of the config file so one
+# wisp.yaml can be shared across the fleet in version control. Leave
+# log.remote.token (and, if you like, log.remote.url) empty and put
+#   WISP_TOKEN=wisp__...
+#   WISP_REMOTE_URL=https://console.internal:8000
+# in this file (root-owned, chmod 600). The leading '-' means a missing file is
+# not an error, so this line is harmless on a sensor that has no console.
+EnvironmentFile=-/etc/wisp/wisp.env
+
 User=wisp
 Group=wisp
 

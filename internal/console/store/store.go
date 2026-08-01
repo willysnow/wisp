@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -315,6 +316,32 @@ func (s *Store) List(ctx context.Context, f Filter) ([]Record, error) {
 // uses it so a large download never has to be assembled in memory first.
 func (s *Store) Each(ctx context.Context, f Filter, limit int, fn func(Record) error) error {
 	return s.each(ctx, f, limit, fn)
+}
+
+// Event returns a single stored event by its database id. The bool is false
+// when nothing has that id — a stale or hand-typed /event/<id> link — which the
+// caller turns into a 404 rather than an error.
+func (s *Store) Event(ctx context.Context, id int64) (Record, bool, error) {
+	var (
+		r       Record
+		ts, raw string
+	)
+	err := s.db.QueryRowContext(ctx,
+		`SELECT id, time, node, service, kind, src_ip, src_port, dst_port, data
+			FROM events WHERE id = ?`, id).
+		Scan(&r.ID, &ts, &r.Node, &r.Service, &r.Kind,
+			&r.SrcIP, &r.SrcPort, &r.DstPort, &raw)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Record{}, false, nil
+	}
+	if err != nil {
+		return Record{}, false, err
+	}
+	r.Time, _ = time.Parse(timeFormat, ts)
+	if err := json.Unmarshal([]byte(raw), &r.Data); err != nil {
+		r.Data = map[string]any{}
+	}
+	return r, true, nil
 }
 
 func (s *Store) each(ctx context.Context, f Filter, limit int, fn func(Record) error) error {

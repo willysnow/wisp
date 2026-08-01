@@ -42,6 +42,16 @@ services:
     volumes:
       - sensor-data:/data
 
+    # The console token, and optionally its URL, injected rather than baked into
+    # wisp.yaml so the same config can ship to every sensor. Leave
+    # log.remote.token (and, if you like, log.remote.url) empty and put
+    # WISP_TOKEN — and WISP_REMOTE_URL — in a .env file beside this compose file
+    # (and .gitignore it). With both set, no wisp.yaml is needed to reach the
+    # console at all.
+    # environment:
+    #   - WISP_TOKEN=${WISP_TOKEN}
+    #   - WISP_REMOTE_URL=${WISP_REMOTE_URL}
+
     # Host networking, so the sensor sees the real client address.
     #
     # This is not a performance choice. With published ports, Docker can

@@ -48,6 +48,10 @@ log:
   # Forward events to a wisp console. Omit the URL to keep this sensor local.
   # remote:
   #   url: "https://console.internal:8000"
+  #   # Leave url empty to read it from WISP_REMOTE_URL, and token empty to read
+  #   # it from WISP_TOKEN. Set both in the environment and a sensor reaches a
+  #   # console with no config file at all — the standalone honeypot needs
+  #   # neither. An explicit value here always wins over the variable.
   #   token: "wisp_..."          # from `wisp-console sensor add <node>`
   #
   #   # A console with a self-signed certificate has to be trusted explicitly.
