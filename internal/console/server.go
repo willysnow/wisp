@@ -248,9 +248,11 @@ type pageData struct {
 	Total   int64
 	Since   string
 	Hours   int
-	Now     time.Time
-	User    string
-	CSRF    string
+	// Live is the ?live auto-reload interval in seconds; 0 means off.
+	Live int
+	Now  time.Time
+	User string
+	CSRF string
 
 	// Matched is how many events the current filter selects, across all pages.
 	Matched int64
@@ -310,6 +312,21 @@ func (s *Server) filterFrom(r *http.Request) (store.Filter, time.Duration) {
 	}, window
 }
 
+// liveRefresh reads the ?live parameter. Present means auto-reload the page every
+// N seconds (default 3, minimum 2) using a plain <meta http-equiv="refresh"> —
+// no JavaScript, in keeping with the rest of the UI. It is for demos and wall
+// displays, where refreshing by hand to catch the newest event is a poor show.
+func liveRefresh(r *http.Request) int {
+	q := r.URL.Query()
+	if !q.Has("live") {
+		return 0
+	}
+	if n, err := strconv.Atoi(q.Get("live")); err == nil && n >= 2 {
+		return n
+	}
+	return 3
+}
+
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, user string) {
 	if r.URL.Path != "/" {
 		http.NotFound(w, r)
@@ -362,6 +379,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request, user string
 		Total:      total,
 		Since:      window.String(),
 		Hours:      int(window.Hours()),
+		Live:       liveRefresh(r),
 		Now:        time.Now(),
 		User:       user,
 		CSRF:       s.issueCSRF(w, r),

@@ -6,6 +6,7 @@ package console
 const indexHTML = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+{{if .Live}}<meta http-equiv="refresh" content="{{.Live}}">{{end}}
 <title>wisp console</title>
 <style>
 :root{--bg:#14161a;--panel:#1c1f26;--line:#2a2f39;--fg:#dfe3ea;--dim:#8b95a6;
@@ -19,6 +20,7 @@ h1{font-size:15px;margin:0;letter-spacing:.5px}
 h1 span{color:var(--dim);font-weight:400}
 .stat{color:var(--dim)}
 .stat b{color:var(--fg);font-weight:600}
+.live{color:var(--ok)}
 main{padding:20px;display:grid;gap:20px;grid-template-columns:minmax(0,1fr) 260px}
 @media(max-width:900px){main{grid-template-columns:1fr}}
 section{background:var(--panel);border:1px solid var(--line);border-radius:6px;overflow:hidden}
@@ -91,6 +93,7 @@ mark{background:none;color:var(--warm);font-weight:600}
   <h1>wisp <span>console</span></h1>
   <span class="stat"><b>{{.Total}}</b> events / last {{.Since}}</span>
   <span class="stat"><b>{{len .Sensors}}</b> sensors</span>
+  {{if .Live}}<span class="stat live">&bull; live &middot; {{.Live}}s</span>{{end}}
   <a href="/tokens" class="nav">tokens &rarr;</a>
   <span class="who">signed in as <b>{{.User}}</b>
     <form class="inline" method="post" action="/logout">

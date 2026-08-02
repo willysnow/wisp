@@ -13,6 +13,13 @@ The design rationale behind every decoy, emulator and token — the *why* — li
 in **[docs/design.md](docs/design.md)**, so this page can stay about what wisp
 does and how to run it.
 
+## Demo
+
+A sensor gets scanned and probed for credentials while the console captures every
+attempt in real time. Reproduce it step by step with **[docs/demo.md](docs/demo.md)**.
+
+<video src="https://github.com/willysnow/wisp/raw/main/docs/wisp-demo.mp4" controls></video>
+
 ## Why this exists
 
 [OpenCanary](https://github.com/thinkst/opencanary) (BSD-3-Clause, by Thinkst)
@@ -252,33 +259,51 @@ driver, so the console is a single static binary too.
 
 ```bash
 go build -o wisp-console ./cmd/wisp-console
+go build -o wispd ./cmd/wispd
+```
+
+**Start the console first** — the token a sensor needs is minted here:
+
+```bash
+./wisp-console -addr :8001
+```
+
+It prints a one-time operator password on first start (the UI login — see
+[Signing in](#signing-in)). In another terminal, enrol the sensor to get its
+token:
+
+```bash
 ./wisp-console sensor add sensor-01
 ```
 
-That prints a token — once. Put it in the sensor's config:
-
-```yaml
-log:
-  file: events.jsonl
-  console: true
-  remote:
-    url: "https://console.example.com"
-    token: "wisp_..."
-```
-
-Neither value has to live in the file. Leave `token` empty and wisp reads it
-from `WISP_TOKEN`; leave `url` empty and it reads `WISP_REMOTE_URL`. Set both and
-a sensor reaches a console with **no config file at all** — the quickest way to
-point one at a console you just started:
+Then point the sensor at the console and start it. The token and URL go in the
+environment, so there is **no config file to write**:
 
 ```bash
-export WISP_TOKEN='wisp__...' WISP_REMOTE_URL='http://127.0.0.1:8001' && ./wispd
+export WISP_TOKEN='wisp__...' WISP_REMOTE_URL='http://127.0.0.1:8001'
+./wispd
 ```
 
-The same two variables let one `wisp.yaml` — the URL in it, the token left empty
-— ship to the whole fleet in version control while each host supplies its secret
-out of band. An explicit value in the file always wins over the variable. Supply
-the token whichever way matches how the sensor runs:
+That is the whole setup. `wispd` with no config runs every decoy on its defaults
+and delivers to the console; open `http://127.0.0.1:8001` in a browser to watch
+the events arrive.
+
+To control what the box pretends to be — a persona so every port tells one story,
+or which decoys run — keep a `wisp.yaml` beside the binary. `wispd` reads it
+automatically, so the command stays `./wispd`; pass `-config <path>` only for a
+file somewhere else:
+
+```yaml
+device:
+  persona: synology            # ssh/http/https/ftp/telnet all answer as Synology
+services:
+  docker: { enabled: false }   # turn off what this box would not run
+```
+
+`token` and `url` can stay out of that file — left empty, they fall back to
+`WISP_TOKEN` and `WISP_REMOTE_URL`. That is what lets one `wisp.yaml` ship to a
+whole fleet in version control while each host supplies its own secret out of
+band, through a systemd `EnvironmentFile` or a container's environment:
 
 ```bash
 printf 'WISP_TOKEN=%s\n' 'wisp__...' | sudo tee /etc/wisp/wisp.env >/dev/null && sudo chmod 600 /etc/wisp/wisp.env && sudo systemctl restart wispd
@@ -290,12 +315,6 @@ echo "WISP_TOKEN=wisp__..." >> .env
 
 (The two lines are the systemd unit's `EnvironmentFile` and a `.env` beside
 `docker-compose.yml` — `.gitignore` both.)
-
-Then run the console:
-
-```bash
-./wisp-console -addr :8001
-```
 
 Each sensor gets its own token, and **the node name comes from the token, not
 from the request body**. A sensor cannot claim to be a different one, so an
@@ -318,9 +337,14 @@ For compatibility a single shared token still works (`-token`, or
 node name falls back to whatever the payload claims, and any holder can forge
 events attributed to any sensor.
 
-Then open the console in a browser. Credential events (`login_password`,
-`auth_attempt`, …) are highlighted; clicking a sensor, service, or source IP
-filters the view.
+In the console, credential events (`login_password`, `auth_attempt`, …) stand
+out in red. Click any event to open its full detail — every captured field on
+one page — and narrow the timeline with the search box or the sensor and
+service side panels. Add `?live` to the URL and the page auto-refreshes (a plain
+`<meta refresh>`, no JavaScript) — handy for a wall display.
+
+To reproduce the walkthrough end to end — one sensor, an attacker, the console
+lighting up in real time — see **[docs/demo.md](docs/demo.md)**.
 
 ### Signing in
 
@@ -547,7 +571,7 @@ popularised; OpenCanary has no token component. wisp's are self-hosted.)
 Mint one from the console CLI:
 
 ```bash
-wisp-console token add -kind docx -memo "finance share"
+./wisp-console token add -kind docx -memo "finance share"
 ```
 
 `token add` has to know the console's own address — it is what the planted token
@@ -555,7 +579,7 @@ calls home to — so it fails until one is set. Either put `tokens.base_url` in
 `console.yaml`, or pass it on the command:
 
 ```bash
-wisp-console token add -kind docx -memo "finance share" -url https://console.example.com
+./wisp-console token add -kind docx -memo "finance share" -url https://console.example.com
 ```
 
 Use whatever address the planted data will call home from: `http://127.0.0.1:8001`
@@ -596,7 +620,7 @@ tokens:
 hand: mint it, then fetch the URL it prints, the way an intruder's tool would.
 
 ```bash
-wisp-console token add -kind http -url http://127.0.0.1:8001 -memo "test"
+./wisp-console token add -kind http -url http://127.0.0.1:8001 -memo "test"
 ```
 
 ```bash
