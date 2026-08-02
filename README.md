@@ -18,7 +18,7 @@ does and how to run it.
 A sensor gets scanned and probed for credentials while the console captures every
 attempt in real time. Reproduce it step by step with **[docs/demo.md](docs/demo.md)**.
 
-https://github.com/user-attachments/assets/2a26ba41-0fdd-48cf-9c59-f632beb2876d
+https://github.com/user-attachments/assets/d4949a0b-544c-4dcc-9b11-4fc37c211bfb
 
 ## Why this exists
 
