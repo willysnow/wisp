@@ -16,9 +16,8 @@ does and how to run it.
 ## Demo
 
 A sensor gets scanned and probed for credentials while the console captures every
-attempt in real time. Reproduce it step by step with **[docs/demo.md](docs/demo.md)**.
-
-<video src="https://github.com/willysnow/wisp/raw/main/docs/wisp-demo.mp4" controls></video>
+attempt in real time. **[▶ Watch the demo](docs/wisp-demo.mp4)** — or reproduce it
+step by step with **[docs/demo.md](docs/demo.md)**.
 
 ## Why this exists
 
